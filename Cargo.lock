@@ -1398,6 +1398,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
+name = "peek"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap 4.6.7",
+ "crossterm",
+ "dirs 6.0.0",
+ "git2",
+ "ratatui",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokei",
+ "tokio",
+ "toml 0.8.23",
+ "walkdir",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1809,27 +1830,6 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "rust-project-analyzer"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap 4.6.7",
- "crossterm",
- "dirs 6.0.0",
- "git2",
- "ratatui",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "tokei",
- "tokio",
- "toml 0.8.23",
- "walkdir",
 ]
 
 [[package]]

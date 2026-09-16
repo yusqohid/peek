@@ -19,9 +19,9 @@ use tui::Tui;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "rpa",
+    name = "peek",
     version,
-    about = "🦀 Rust Project Analyzer — TUI dashboard for developers"
+    about = "👀 peek — A friendly TUI dashboard to take a quick peek at your projects"
 )]
 struct Cli {
     /// Root directory to scan for projects (overrides config).

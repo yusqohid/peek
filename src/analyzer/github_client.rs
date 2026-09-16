@@ -15,10 +15,7 @@ pub struct GitHubClient {
 impl GitHubClient {
     pub fn new(username: String, token: Option<String>) -> Result<Self, String> {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            USER_AGENT,
-            HeaderValue::from_static("rust-project-analyzer-tui/0.3.0"),
-        );
+        headers.insert(USER_AGENT, HeaderValue::from_static("peek-tui/0.3.0"));
         headers.insert(
             "Accept",
             HeaderValue::from_static("application/vnd.github+json"),

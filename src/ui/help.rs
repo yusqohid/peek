@@ -11,13 +11,13 @@ pub fn render(f: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from(vec![
             Span::styled(
-                "  🦀 Rust Project Analyzer",
+                "  👀 peek",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                "  v0.3.0 (Phase 3 - GitHub & Insights)",
+                "  v0.3.0 — Friendly Developer Project Analyzer",
                 Style::default().fg(Color::DarkGray),
             ),
         ]),

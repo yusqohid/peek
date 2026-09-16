@@ -1,8 +1,8 @@
 [package]
-name = "rust-project-analyzer"
+name = "peek"
 version = "0.1.0"
 edition = "2024"
-description = "TUI-based project analyzer for developers"
+description = "A friendly and casual TUI developer project analyzer"
 
 [dependencies]
 # TUI

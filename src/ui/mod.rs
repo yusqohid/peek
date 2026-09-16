@@ -33,11 +33,7 @@ pub fn render(f: &mut Frame, app: &App) {
         .collect();
 
     let tabs = Tabs::new(tab_titles)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" 🦀 Rust Project Analyzer "),
-        )
+        .block(Block::default().borders(Borders::ALL).title(" 👀 peek "))
         .select(app.active_tab.index())
         .style(Style::default().fg(Color::Gray))
         .highlight_style(

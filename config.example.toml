@@ -1,4 +1,4 @@
-# Rust Project Analyzer Configuration
+# peek — Developer Project Analyzer Configuration
 # Copy this file to config.toml and customize.
 
 [general]
