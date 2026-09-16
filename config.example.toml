@@ -1,0 +1,34 @@
+# Rust Project Analyzer Configuration
+# Copy this file to config.toml and customize.
+
+[general]
+# Root directory to scan for projects
+scan_directory = "~/Dev"
+
+# How deep to scan for projects (max directory depth)
+scan_depth = 3
+
+# Refresh interval in seconds (for future auto-refresh)
+refresh_interval_secs = 300
+
+[display]
+# Default tab on startup: "dashboard", "projects"
+default_tab = "dashboard"
+
+[analysis]
+# Directories to exclude from code analysis
+exclude_dirs = [
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".git",
+    "vendor",
+    "__pycache__",
+    ".venv",
+    "venv",
+]
+
+# Projects to ignore (directory names or paths relative to scan_directory)
+# Use this for mock projects, experiments, etc.
+ignored_projects = []

@@ -1,0 +1,28 @@
+[package]
+name = "rust-project-analyzer"
+version = "0.1.0"
+edition = "2024"
+description = "TUI-based project analyzer for developers"
+
+[dependencies]
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Analysis
+tokei = "12"
+
+# Serialization & Config
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+thiserror = "2"
+walkdir = "2"
+dirs = "6"
