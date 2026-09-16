@@ -1,4 +1,5 @@
 pub mod dashboard;
+pub mod github_view;
 pub mod help;
 pub mod project_detail;
 pub mod project_list;
@@ -63,6 +64,7 @@ pub fn render(f: &mut Frame, app: &App) {
                 project_list::render(f, app, chunks[1]);
             }
         }
+        ActiveTab::GitHub => github_view::render(f, app, chunks[1]),
         ActiveTab::Help => help::render(f, chunks[1]),
     }
 

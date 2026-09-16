@@ -115,6 +115,26 @@ fn render_stats_row(f: &mut Frame, project: &ProjectInfo, area: Rect) {
             .collect();
 
         lines.push(Line::from(lang_spans));
+
+        if let Some(todos) = &project.todo_stats {
+            lines.push(Line::from(vec![
+                Span::styled("  Debt Markers: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{} TODOs", todos.todo_count),
+                    Style::default().fg(Color::Cyan),
+                ),
+                Span::styled(", ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{} FIXMEs/BUGs", todos.fixme_count + todos.bug_count),
+                    if (todos.fixme_count + todos.bug_count) > 0 {
+                        Style::default().fg(Color::Red)
+                    } else {
+                        Style::default().fg(Color::Green)
+                    },
+                ),
+            ]));
+        }
+
         lines
     } else {
         vec![Line::from(Span::styled(

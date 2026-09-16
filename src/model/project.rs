@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::git::GitStats;
 use super::stats::CodeStats;
+use crate::analyzer::todo_scanner::TodoStats;
 
 /// Type of project detected by scanning for marker files.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +74,9 @@ pub struct ProjectInfo {
     /// Git statistics (populated if the project is a git repo).
     pub git_stats: Option<GitStats>,
 
+    /// Technical debt markers (TODO, FIXME, etc.).
+    pub todo_stats: Option<TodoStats>,
+
     /// When the project was last modified (from filesystem or git).
     pub last_modified: Option<DateTime<Local>>,
 
@@ -88,6 +92,7 @@ impl ProjectInfo {
             project_type,
             code_stats: None,
             git_stats: None,
+            todo_stats: None,
             last_modified: None,
             ignored: false,
         }

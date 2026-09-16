@@ -35,6 +35,10 @@ struct Cli {
     /// Maximum scan depth (overrides config).
     #[arg(short, long)]
     depth: Option<usize>,
+
+    /// GitHub username to monitor (overrides config).
+    #[arg(short = 'g', long)]
+    github_user: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -51,10 +55,14 @@ fn main() -> Result<()> {
     if let Some(depth) = cli.depth {
         config.general.scan_depth = depth;
     }
+    if let Some(user) = &cli.github_user {
+        config.github.username = user.clone();
+    }
 
-    // Initialise application state and run the initial scan.
+    // Initialise application state and run initial scans.
     let mut app = App::new(config);
     app.scan_and_analyze();
+    app.fetch_github();
 
     // Set up the terminal and event loop.
     let mut tui = Tui::new()?;

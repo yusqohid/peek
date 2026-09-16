@@ -1,7 +1,10 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::analyzer::{code_stats, git_analyzer, scanner};
+use crate::analyzer::{
+    code_stats, git_analyzer, github_client::GitHubClient, scanner, todo_scanner,
+};
 use crate::config::AppConfig;
+use crate::model::github::GitHubData;
 use crate::model::project::ProjectInfo;
 
 /// Which tab / view is currently active.
@@ -9,17 +12,19 @@ use crate::model::project::ProjectInfo;
 pub enum ActiveTab {
     Dashboard,
     Projects,
+    GitHub,
     Help,
 }
 
 impl ActiveTab {
-    pub const ALL: [Self; 3] = [Self::Dashboard, Self::Projects, Self::Help];
+    pub const ALL: [Self; 4] = [Self::Dashboard, Self::Projects, Self::GitHub, Self::Help];
 
     pub fn index(self) -> usize {
         match self {
             Self::Dashboard => 0,
             Self::Projects => 1,
-            Self::Help => 2,
+            Self::GitHub => 2,
+            Self::Help => 3,
         }
     }
 
@@ -27,6 +32,7 @@ impl ActiveTab {
         match i {
             0 => Self::Dashboard,
             1 => Self::Projects,
+            2 => Self::GitHub,
             _ => Self::Help,
         }
     }
@@ -35,6 +41,7 @@ impl ActiveTab {
         match self {
             Self::Dashboard => "Dashboard",
             Self::Projects => "Projects",
+            Self::GitHub => "GitHub",
             Self::Help => "Help",
         }
     }
@@ -81,12 +88,14 @@ pub struct App {
     pub should_quit: bool,
     pub config: AppConfig,
     pub status_message: String,
+    pub github_data: GitHubData,
 }
 
 impl App {
     pub fn new(config: AppConfig) -> Self {
         let default_tab = match config.display.default_tab.as_str() {
             "projects" => ActiveTab::Projects,
+            "github" => ActiveTab::GitHub,
             "help" => ActiveTab::Help,
             _ => ActiveTab::Dashboard,
         };
@@ -101,10 +110,11 @@ impl App {
             should_quit: false,
             config,
             status_message: String::new(),
+            github_data: GitHubData::default(),
         }
     }
 
-    /// Run the initial project scan, code analysis, and git analysis.
+    /// Run the initial project scan, code analysis, git analysis, and technical debt scan.
     pub fn scan_and_analyze(&mut self) {
         self.is_loading = true;
         self.status_message = "Scanning projects…".to_string();
@@ -114,7 +124,7 @@ impl App {
 
         self.projects = scanner::scan_projects(&scan_dir, depth, &self.config.analysis);
 
-        // Analyze code stats and git history for each non-ignored project.
+        // Analyze code stats, git history, and todo markers for each non-ignored project.
         let total = self.projects.len();
         for (i, project) in self.projects.iter_mut().enumerate() {
             if project.ignored {
@@ -123,6 +133,10 @@ impl App {
             self.status_message = format!("Analyzing [{}/{}] {}…", i + 1, total, project.name);
             project.code_stats = Some(code_stats::analyze(&project.path, &self.config.analysis));
             project.git_stats = git_analyzer::analyze_git(&project.path);
+            project.todo_stats = Some(todo_scanner::scan_todos(
+                &project.path,
+                &self.config.analysis.exclude_dirs,
+            ));
             if let Some(git) = &project.git_stats
                 && let Some(last) = &git.last_commit
             {
@@ -134,6 +148,74 @@ impl App {
         self.is_loading = false;
         let active = self.visible_projects().len();
         self.status_message = format!("Found {active} projects");
+    }
+
+    /// Fetch remote GitHub data if username is configured.
+    pub fn fetch_github(&mut self) {
+        let username = self.config.github.username.trim().to_string();
+        if username.is_empty() {
+            return;
+        }
+
+        self.github_data.is_loading = true;
+        let token = self.config.github.resolved_token();
+        match GitHubClient::new(username, token) {
+            Ok(client) => {
+                if let Ok(rt) = tokio::runtime::Runtime::new() {
+                    match rt.block_on(client.fetch_all()) {
+                        Ok(data) => {
+                            self.github_data = data;
+                        }
+                        Err(e) => {
+                            self.github_data.error_message = Some(e);
+                            self.github_data.is_loading = false;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                self.github_data.error_message = Some(e);
+                self.github_data.is_loading = false;
+            }
+        }
+    }
+
+    /// Count projects with no commits in the last 30 days.
+    pub fn stale_projects_count(&self) -> usize {
+        self.projects
+            .iter()
+            .filter(|p| !p.ignored)
+            .filter(|p| {
+                if let Some(git) = &p.git_stats {
+                    git.commits_last_30_days == 0
+                } else if let Some(last) = p.last_modified {
+                    let elapsed = chrono::Local::now().signed_duration_since(last);
+                    elapsed.num_days() > 30
+                } else {
+                    false
+                }
+            })
+            .count()
+    }
+
+    /// Total TODO markers found across all active projects.
+    pub fn total_todos(&self) -> usize {
+        self.projects
+            .iter()
+            .filter(|p| !p.ignored)
+            .filter_map(|p| p.todo_stats.as_ref())
+            .map(|t| t.todo_count)
+            .sum()
+    }
+
+    /// Total FIXME / BUG markers found across all active projects.
+    pub fn total_fixmes(&self) -> usize {
+        self.projects
+            .iter()
+            .filter(|p| !p.ignored)
+            .filter_map(|p| p.todo_stats.as_ref())
+            .map(|t| t.fixme_count + t.bug_count)
+            .sum()
     }
 
     /// Projects filtered by the ignored flag.
@@ -241,7 +323,11 @@ impl App {
                 self.active_tab = ActiveTab::Projects;
                 return;
             }
-            KeyCode::Char('3') | KeyCode::Char('?') => {
+            KeyCode::Char('3') => {
+                self.active_tab = ActiveTab::GitHub;
+                return;
+            }
+            KeyCode::Char('4') | KeyCode::Char('?') => {
                 self.active_tab = ActiveTab::Help;
                 return;
             }
@@ -261,6 +347,7 @@ impl App {
             }
             KeyCode::Char('r') => {
                 self.scan_and_analyze();
+                self.fetch_github();
                 return;
             }
             _ => {}

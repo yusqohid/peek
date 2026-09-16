@@ -32,3 +32,11 @@ exclude_dirs = [
 # Projects to ignore (directory names or paths relative to scan_directory)
 # Use this for mock projects, experiments, etc.
 ignored_projects = []
+
+[github]
+# GitHub username to monitor public activity and repositories
+username = ""
+
+# Personal Access Token (can also be provided via GITHUB_TOKEN environment variable)
+# token = "ghp_yourPersonalAccessTokenHere"
+

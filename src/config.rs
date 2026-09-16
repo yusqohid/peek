@@ -14,6 +14,9 @@ pub struct AppConfig {
 
     #[serde(default)]
     pub analysis: AnalysisConfig,
+
+    #[serde(default)]
+    pub github: GitHubConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -48,6 +51,27 @@ pub struct AnalysisConfig {
     /// Project directory names (or relative paths) to ignore completely.
     #[serde(default)]
     pub ignored_projects: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct GitHubConfig {
+    /// GitHub username to monitor.
+    #[serde(default)]
+    pub username: String,
+
+    /// Optional Personal Access Token (can also be read from GITHUB_TOKEN env var).
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+impl GitHubConfig {
+    pub fn resolved_token(&self) -> Option<String> {
+        std::env::var("GITHUB_TOKEN")
+            .ok()
+            .filter(|t| !t.trim().is_empty())
+            .or_else(|| self.token.clone())
+            .filter(|t| !t.trim().is_empty())
+    }
 }
 
 // ── defaults ──

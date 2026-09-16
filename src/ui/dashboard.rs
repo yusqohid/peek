@@ -22,7 +22,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(11), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(9),
+            Constraint::Length(6),
+            Constraint::Min(0),
+        ])
         .split(top_cols[0]);
 
     let right_chunks = Layout::default()
@@ -31,7 +35,8 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         .split(top_cols[1]);
 
     render_overview(f, app, left_chunks[0]);
-    render_language_chart(f, app, left_chunks[1]);
+    render_insights(f, app, left_chunks[1]);
+    render_language_chart(f, app, left_chunks[2]);
     render_top_projects(f, app, right_chunks[0]);
     render_recent_projects(f, app, right_chunks[1]);
 
@@ -40,6 +45,70 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let heatmap =
         ActivityHeatmap::new(&combined_data).title(" 📅 Global Commit Activity (Last 52 Weeks) ");
     f.render_widget(heatmap, main_rows[1]);
+}
+
+/// Left: Developer insights (stale projects, tech debt, GitHub status).
+fn render_insights(f: &mut Frame, app: &App, area: Rect) {
+    let stale = app.stale_projects_count();
+    let todos = app.total_todos();
+    let fixmes = app.total_fixmes();
+
+    let github_status = if !app.config.github.username.trim().is_empty() {
+        if app.github_data.user.is_some() {
+            format!("Connected (@{})", app.config.github.username)
+        } else if app.github_data.error_message.is_some() {
+            "API error (press r)".to_string()
+        } else {
+            format!("Configured (@{})", app.config.github.username)
+        }
+    } else {
+        "Not configured (see [3] GitHub)".to_string()
+    };
+
+    let text = vec![
+        Line::from(vec![
+            Span::styled(
+                "  💤 Stale (>30d idle): ",
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!("{stale} projects"),
+                if stale > 0 {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::Green)
+                },
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "  📝 Tech Debt:         ",
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(format!("{todos} TODOs"), Style::default().fg(Color::Cyan)),
+            Span::styled(", ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{fixmes} FIXMEs"),
+                if fixmes > 0 {
+                    Style::default().fg(Color::Red)
+                } else {
+                    Style::default().fg(Color::Green)
+                },
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "  🐙 GitHub Status:     ",
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(github_status, Style::default().fg(Color::Magenta)),
+        ]),
+    ];
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" 💡 Developer Insights ");
+    f.render_widget(Paragraph::new(text).block(block), area);
 }
 
 /// Top-left: aggregate numbers.

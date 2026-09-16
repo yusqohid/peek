@@ -17,7 +17,7 @@ pub fn render(f: &mut Frame, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                "  v0.2.0 (Phase 2 - Git Analysis)",
+                "  v0.3.0 (Phase 3 - GitHub & Insights)",
                 Style::default().fg(Color::DarkGray),
             ),
         ]),
@@ -31,7 +31,8 @@ pub fn render(f: &mut Frame, area: Rect) {
         Line::from(""),
         key_line("1", "Dashboard tab"),
         key_line("2", "Projects tab"),
-        key_line("3 / ?", "Help tab"),
+        key_line("3", "GitHub Activity tab"),
+        key_line("4 / ?", "Help tab"),
         key_line("Tab / Shift+Tab", "Next / Previous tab"),
         Line::from(""),
         Line::from(Span::styled(
@@ -57,7 +58,7 @@ pub fn render(f: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        key_line("r", "Rescan and re-analyze all projects"),
+        key_line("r", "Rescan projects and refresh GitHub data"),
         key_line("q / Ctrl+C", "Quit"),
         Line::from(""),
         Line::from(Span::styled(
@@ -69,6 +70,10 @@ pub fn render(f: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "  Copy config.example.toml → config.toml and edit to customize.",
+            Style::default().fg(Color::Gray),
+        )),
+        Line::from(Span::styled(
+            "  Set `[github] username` and `GITHUB_TOKEN` to enable GitHub activity.",
             Style::default().fg(Color::Gray),
         )),
         Line::from(Span::styled(
