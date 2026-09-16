@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 
+use super::git::GitStats;
 use super::stats::CodeStats;
 
 /// Type of project detected by scanning for marker files.
@@ -69,6 +70,9 @@ pub struct ProjectInfo {
     /// Code statistics (populated after analysis).
     pub code_stats: Option<CodeStats>,
 
+    /// Git statistics (populated if the project is a git repo).
+    pub git_stats: Option<GitStats>,
+
     /// When the project was last modified (from filesystem or git).
     pub last_modified: Option<DateTime<Local>>,
 
@@ -83,6 +87,7 @@ impl ProjectInfo {
             path,
             project_type,
             code_stats: None,
+            git_stats: None,
             last_modified: None,
             ignored: false,
         }
@@ -91,6 +96,11 @@ impl ProjectInfo {
     /// Total lines of code, or 0 if not yet analyzed.
     pub fn total_loc(&self) -> usize {
         self.code_stats.as_ref().map_or(0, |s| s.code_lines)
+    }
+
+    /// Total git commits, or 0 if not a git repo or not yet analyzed.
+    pub fn total_commits(&self) -> usize {
+        self.git_stats.as_ref().map_or(0, |g| g.total_commits)
     }
 
     /// Human-friendly "time ago" string for last_modified.

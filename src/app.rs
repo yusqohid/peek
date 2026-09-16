@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::analyzer::{code_stats, scanner};
+use crate::analyzer::{code_stats, git_analyzer, scanner};
 use crate::config::AppConfig;
 use crate::model::project::ProjectInfo;
 
@@ -45,6 +45,7 @@ impl ActiveTab {
 pub enum SortOrder {
     Name,
     Loc,
+    Commits,
     LastModified,
 }
 
@@ -53,6 +54,7 @@ impl SortOrder {
         match self {
             Self::Name => "Name",
             Self::Loc => "LOC",
+            Self::Commits => "Commits",
             Self::LastModified => "Recent",
         }
     }
@@ -60,7 +62,8 @@ impl SortOrder {
     pub fn next(self) -> Self {
         match self {
             Self::Name => Self::Loc,
-            Self::Loc => Self::LastModified,
+            Self::Loc => Self::Commits,
+            Self::Commits => Self::LastModified,
             Self::LastModified => Self::Name,
         }
     }
@@ -71,6 +74,7 @@ pub struct App {
     pub active_tab: ActiveTab,
     pub projects: Vec<ProjectInfo>,
     pub selected_project: usize,
+    pub detail_project: Option<usize>,
     pub sort_order: SortOrder,
     pub show_ignored: bool,
     pub is_loading: bool,
@@ -90,6 +94,7 @@ impl App {
             active_tab: default_tab,
             projects: Vec::new(),
             selected_project: 0,
+            detail_project: None,
             sort_order: SortOrder::Name,
             show_ignored: false,
             is_loading: false,
@@ -99,7 +104,7 @@ impl App {
         }
     }
 
-    /// Run the initial project scan and code analysis.
+    /// Run the initial project scan, code analysis, and git analysis.
     pub fn scan_and_analyze(&mut self) {
         self.is_loading = true;
         self.status_message = "Scanning projects…".to_string();
@@ -109,7 +114,7 @@ impl App {
 
         self.projects = scanner::scan_projects(&scan_dir, depth, &self.config.analysis);
 
-        // Analyze code stats for each non-ignored project.
+        // Analyze code stats and git history for each non-ignored project.
         let total = self.projects.len();
         for (i, project) in self.projects.iter_mut().enumerate() {
             if project.ignored {
@@ -117,6 +122,12 @@ impl App {
             }
             self.status_message = format!("Analyzing [{}/{}] {}…", i + 1, total, project.name);
             project.code_stats = Some(code_stats::analyze(&project.path, &self.config.analysis));
+            project.git_stats = git_analyzer::analyze_git(&project.path);
+            if let Some(git) = &project.git_stats
+                && let Some(last) = &git.last_commit
+            {
+                project.last_modified = Some(last.timestamp);
+            }
         }
 
         self.apply_sort();
@@ -167,9 +178,51 @@ impl App {
         langs.len()
     }
 
+    /// Total commits across all visible (non-ignored) projects.
+    pub fn total_commits(&self) -> usize {
+        self.projects
+            .iter()
+            .filter(|p| !p.ignored)
+            .map(|p| p.total_commits())
+            .sum()
+    }
+
+    /// Combined daily activity for the last 52 weeks (364 days) across all projects.
+    pub fn combined_activity_52_weeks(&self) -> Vec<usize> {
+        let mut combined = vec![0usize; 364];
+        for p in &self.projects {
+            if p.ignored {
+                continue;
+            }
+            if let Some(git) = &p.git_stats {
+                for (i, &count) in git.daily_activity.iter().enumerate() {
+                    if i < 364 {
+                        combined[i] += count;
+                    }
+                }
+            }
+        }
+        combined
+    }
+
     // ── key handling ────────────────────────────────────────────
 
     pub fn handle_key(&mut self, key: KeyEvent) {
+        // If in detail view, Esc / Backspace / q returns to project list.
+        if self.detail_project.is_some() {
+            match key.code {
+                KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('q') => {
+                    self.detail_project = None;
+                    return;
+                }
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.should_quit = true;
+                    return;
+                }
+                _ => return,
+            }
+        }
+
         // Global bindings.
         match key.code {
             KeyCode::Char('q') => {
@@ -225,6 +278,9 @@ impl App {
             return;
         }
         match key.code {
+            KeyCode::Enter => {
+                self.detail_project = Some(self.selected_project);
+            }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.selected_project = (self.selected_project + 1).min(visible_len - 1);
             }
@@ -262,6 +318,10 @@ impl App {
             SortOrder::Loc => {
                 self.projects
                     .sort_by_key(|a| std::cmp::Reverse(a.total_loc()));
+            }
+            SortOrder::Commits => {
+                self.projects
+                    .sort_by_key(|a| std::cmp::Reverse(a.total_commits()));
             }
             SortOrder::LastModified => {
                 self.projects

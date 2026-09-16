@@ -16,7 +16,10 @@ pub fn render(f: &mut Frame, area: Rect) {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  v0.1.0", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "  v0.2.0 (Phase 2 - Git Analysis)",
+                Style::default().fg(Color::DarkGray),
+            ),
         ]),
         Line::from(""),
         Line::from(Span::styled(
@@ -32,17 +35,19 @@ pub fn render(f: &mut Frame, area: Rect) {
         key_line("Tab / Shift+Tab", "Next / Previous tab"),
         Line::from(""),
         Line::from(Span::styled(
-            "  Project List",
+            "  Project List & Detail",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
+        key_line("Enter", "Open selected project detail view"),
+        key_line("Esc / Backspace", "Return to project list from detail"),
         key_line("j / ↓", "Move down"),
         key_line("k / ↑", "Move up"),
         key_line("g / Home", "Go to top"),
         key_line("G / End", "Go to bottom"),
-        key_line("s", "Cycle sort order (Name → LOC → Recent)"),
+        key_line("s", "Cycle sort order (Name → LOC → Commits → Recent)"),
         key_line("i", "Toggle ignored projects visibility"),
         Line::from(""),
         Line::from(Span::styled(

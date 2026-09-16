@@ -1,6 +1,8 @@
 pub mod dashboard;
 pub mod help;
+pub mod project_detail;
 pub mod project_list;
+pub mod widgets;
 
 use ratatui::{
     Frame,
@@ -49,7 +51,18 @@ pub fn render(f: &mut Frame, app: &App) {
     // ── Main content ──
     match app.active_tab {
         ActiveTab::Dashboard => dashboard::render(f, app, chunks[1]),
-        ActiveTab::Projects => project_list::render(f, app, chunks[1]),
+        ActiveTab::Projects => {
+            if let Some(idx) = app.detail_project {
+                let visible = app.visible_projects();
+                if let Some(project) = visible.get(idx) {
+                    project_detail::render(f, project, chunks[1]);
+                } else {
+                    project_list::render(f, app, chunks[1]);
+                }
+            } else {
+                project_list::render(f, app, chunks[1]);
+            }
+        }
         ActiveTab::Help => help::render(f, chunks[1]),
     }
 

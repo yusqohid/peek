@@ -15,6 +15,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         Cell::from("Project"),
         Cell::from("Type"),
         Cell::from("LOC"),
+        Cell::from("Commits"),
         Cell::from("Files"),
         Cell::from("Primary Lang"),
         Cell::from("Last Activity"),
@@ -34,6 +35,10 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 .code_stats
                 .as_ref()
                 .map_or("-".to_string(), |s| format_number(s.code_lines));
+            let commits = p
+                .git_stats
+                .as_ref()
+                .map_or("-".to_string(), |g| format_number(g.total_commits));
             let files = p
                 .code_stats
                 .as_ref()
@@ -60,6 +65,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 Cell::from(name_display),
                 Cell::from(p.project_type.icon()),
                 Cell::from(loc),
+                Cell::from(commits),
                 Cell::from(files),
                 Cell::from(primary),
                 Cell::from(p.last_activity_display()),
@@ -70,9 +76,10 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
     let widths = [
         ratatui::layout::Constraint::Length(4),
-        ratatui::layout::Constraint::Min(18),
+        ratatui::layout::Constraint::Min(16),
         ratatui::layout::Constraint::Length(6),
-        ratatui::layout::Constraint::Length(10),
+        ratatui::layout::Constraint::Length(9),
+        ratatui::layout::Constraint::Length(9),
         ratatui::layout::Constraint::Length(7),
         ratatui::layout::Constraint::Length(14),
         ratatui::layout::Constraint::Length(14),
@@ -84,7 +91,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(" 📁 Projects ")
-                .title_bottom(" [s] Sort  [i] Toggle ignored  [j/k] Navigate  [r] Refresh "),
+                .title_bottom(
+                    " [Enter] Detail  [s] Sort  [i] Ignored  [j/k] Navigate  [r] Refresh ",
+                ),
         )
         .row_highlight_style(
             Style::default()

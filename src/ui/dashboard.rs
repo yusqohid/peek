@@ -7,27 +7,39 @@ use ratatui::{
 };
 
 use crate::app::App;
+use crate::ui::widgets::heatmap::ActivityHeatmap;
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
+    let main_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(16), Constraint::Length(10)])
+        .split(area);
+
+    let top_cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area);
+        .split(main_rows[0]);
 
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(9), Constraint::Min(0)])
-        .split(chunks[0]);
+        .constraints([Constraint::Length(11), Constraint::Min(0)])
+        .split(top_cols[0]);
 
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(chunks[1]);
+        .split(top_cols[1]);
 
     render_overview(f, app, left_chunks[0]);
     render_language_chart(f, app, left_chunks[1]);
     render_top_projects(f, app, right_chunks[0]);
     render_recent_projects(f, app, right_chunks[1]);
+
+    // Bottom row: Combined activity heatmap across all projects
+    let combined_data = app.combined_activity_52_weeks();
+    let heatmap =
+        ActivityHeatmap::new(&combined_data).title(" 📅 Global Commit Activity (Last 52 Weeks) ");
+    f.render_widget(heatmap, main_rows[1]);
 }
 
 /// Top-left: aggregate numbers.
@@ -62,6 +74,13 @@ fn render_overview(f: &mut Frame, app: &App, area: Rect) {
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
             ),
+            Span::styled("  Total Commits:  ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                format_number(app.total_commits()),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -70,10 +89,7 @@ fn render_overview(f: &mut Frame, app: &App, area: Rect) {
                 format_number(app.total_files()),
                 Style::default().fg(Color::Yellow),
             ),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  Languages:       ", Style::default().fg(Color::Gray)),
+            Span::styled("  Languages:      ", Style::default().fg(Color::Gray)),
             Span::styled(
                 format!("{}", app.unique_languages()),
                 Style::default().fg(Color::Magenta),

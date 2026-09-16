@@ -11,6 +11,7 @@ crossterm = "0.28"
 
 # Analysis
 tokei = "12"
+git2 = "0.19"
 
 # Serialization & Config
 serde = { version = "1", features = ["derive"] }
