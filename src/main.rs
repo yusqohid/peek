@@ -5,6 +5,7 @@ mod event;
 mod model;
 mod tui;
 mod ui;
+mod worker;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -59,10 +60,10 @@ fn main() -> Result<()> {
         config.github.username = user.clone();
     }
 
-    // Initialise application state and run initial scans.
+    // Initialise application state and kick off background work.
     let mut app = App::new(config);
-    app.scan_and_analyze();
-    app.fetch_github();
+    app.start_scan();
+    app.start_github_fetch();
 
     // Set up the terminal and event loop.
     let mut tui = Tui::new()?;
@@ -70,6 +71,9 @@ fn main() -> Result<()> {
 
     // ── Main loop ──
     while !app.should_quit {
+        // Drain completed background work without blocking the UI.
+        app.poll_background();
+
         // Render.
         tui.terminal.draw(|frame| {
             ui::render(frame, &app);
@@ -78,7 +82,7 @@ fn main() -> Result<()> {
         // Handle next event.
         match events.next()? {
             Event::Key(key) => app.handle_key(key),
-            Event::Tick => { /* future: background refresh */ }
+            Event::Tick => { /* polled above; refresh timers live here */ }
             Event::Resize(_, _) => { /* ratatui handles this automatically */ }
             Event::Mouse(_) => { /* future: mouse support */ }
         }
