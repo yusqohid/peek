@@ -1,5 +1,6 @@
 mod analyzer;
 mod app;
+mod cache;
 mod config;
 mod event;
 mod model;
@@ -82,7 +83,12 @@ fn main() -> Result<()> {
         // Handle next event.
         match events.next()? {
             Event::Key(key) => app.handle_key(key),
-            Event::Tick => { /* polled above; refresh timers live here */ }
+            Event::Tick => {
+                if app.should_auto_refresh(std::time::Instant::now()) {
+                    app.start_scan();
+                    app.start_github_fetch();
+                }
+            }
             Event::Resize(_, _) => { /* ratatui handles this automatically */ }
             Event::Mouse(_) => { /* future: mouse support */ }
         }

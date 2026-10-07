@@ -3,6 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::analyzer::{
     code_stats, git_analyzer, github_client::GitHubClient, scanner, todo_scanner,
 };
+use crate::cache::AnalysisCache;
 use crate::config::AppConfig;
 use crate::model::github::GitHubData;
 use crate::model::project::ProjectInfo;
@@ -116,6 +117,8 @@ pub struct App {
     pub github_data: GitHubData,
     pub scan_rx: Option<std::sync::mpsc::Receiver<ScanEvent>>,
     pub github_rx: Option<std::sync::mpsc::Receiver<GithubEvent>>,
+    pub cache: AnalysisCache,
+    pub last_scan: Option<std::time::Instant>,
 }
 
 impl App {
@@ -141,6 +144,20 @@ impl App {
             github_data: GitHubData::default(),
             scan_rx: None,
             github_rx: None,
+            cache: AnalysisCache::default(),
+            last_scan: None,
+        }
+    }
+
+    /// Whether an automatic refresh is due. Manual scans update the timer.
+    pub fn should_auto_refresh(&self, now: std::time::Instant) -> bool {
+        let interval = self.config.general.refresh_interval_secs;
+        if interval == 0 || self.is_loading || self.scan_rx.is_some() {
+            return false;
+        }
+        match self.last_scan {
+            Some(last) => now.duration_since(last).as_secs() >= interval,
+            None => false,
         }
     }
 
@@ -165,17 +182,19 @@ impl App {
         self.is_loading = true;
         self.scan_error = None;
         self.status_message = format!("Starting scan in {}…", scan_dir.display());
+        self.last_scan = Some(std::time::Instant::now());
 
         let (tx, rx) = std::sync::mpsc::channel();
         self.scan_rx = Some(rx);
         let depth = self.config.general.scan_depth;
         let analysis = self.config.analysis.clone();
-        std::thread::spawn(move || run_scan(scan_dir, depth, analysis, tx));
+        let cache = self.cache.clone();
+        std::thread::spawn(move || run_scan(scan_dir, depth, analysis, cache, tx));
     }
 
     /// Drain finished background work without blocking. Call once per frame.
     pub fn poll_background(&mut self) {
-        let mut finished_projects: Option<Vec<ProjectInfo>> = None;
+        let mut finished: Option<(Vec<ProjectInfo>, AnalysisCache, usize)> = None;
         let mut scan_failed: Option<String> = None;
         let mut scan_disconnected = false;
 
@@ -188,8 +207,12 @@ impl App {
                     Ok(ScanEvent::ProjectDone { index, total, name }) => {
                         self.status_message = format!("Analyzing [{index}/{total}] {name}…");
                     }
-                    Ok(ScanEvent::Finished { projects }) => {
-                        finished_projects = Some(projects);
+                    Ok(ScanEvent::Finished {
+                        projects,
+                        cache,
+                        cached,
+                    }) => {
+                        finished = Some((projects, cache, cached));
                         break;
                     }
                     Ok(ScanEvent::Failed { message }) => {
@@ -205,18 +228,24 @@ impl App {
             }
         }
 
-        if let Some(projects) = finished_projects {
+        if let Some((projects, cache, cached)) = finished {
             self.projects = projects;
+            self.cache = cache;
             self.apply_sort();
             self.is_loading = false;
             self.scan_rx = None;
             self.scan_error = None;
+            self.last_scan = Some(std::time::Instant::now());
             if self.projects.is_empty() {
                 let dir = self.config.resolved_scan_directory();
                 self.status_message = format!("No projects found in {}", dir.display());
             } else {
                 let active = self.visible_projects().len();
-                self.status_message = format!("Found {active} projects");
+                self.status_message = if cached > 0 {
+                    format!("Found {active} projects ({cached} cached)")
+                } else {
+                    format!("Found {active} projects")
+                };
             }
         } else if let Some(message) = scan_failed {
             self.projects.clear();
@@ -783,6 +812,8 @@ mod tests {
                 project_with_stats("beta", 10, 1, 1),
                 project_with_stats("alpha", 10, 1, 1),
             ],
+            cache: crate::cache::AnalysisCache::default(),
+            cached: 0,
         })
         .expect("send should work");
 
@@ -836,5 +867,24 @@ mod tests {
         assert!(app.scan_rx.is_none());
         assert!(!app.is_loading);
         assert!(app.scan_error.is_some());
+    }
+
+    #[test]
+    fn auto_refresh_respects_interval_and_loading() {
+        let mut config = AppConfig::default();
+        config.general.refresh_interval_secs = 60;
+        let mut app = App::new(config);
+        // Never scanned -> no auto refresh yet.
+        assert!(!app.should_auto_refresh(std::time::Instant::now()));
+
+        app.last_scan = Some(std::time::Instant::now() - std::time::Duration::from_secs(61));
+        assert!(app.should_auto_refresh(std::time::Instant::now()));
+
+        app.is_loading = true;
+        assert!(!app.should_auto_refresh(std::time::Instant::now()));
+        app.is_loading = false;
+
+        app.config.general.refresh_interval_secs = 0;
+        assert!(!app.should_auto_refresh(std::time::Instant::now()));
     }
 }
