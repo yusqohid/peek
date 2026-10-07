@@ -74,6 +74,10 @@ pub struct GitHubData {
     pub user: Option<GitHubUser>,
     pub events: Vec<GitHubEvent>,
     pub repos: Vec<GitHubRepo>,
+    /// Fetch of events failed while user/repos succeeded (partial failure).
+    pub events_error: Option<String>,
+    /// Fetch of repos failed while user/events succeeded (partial failure).
+    pub repos_error: Option<String>,
     #[allow(dead_code)]
     pub last_fetched: Option<DateTime<Local>>,
     #[allow(dead_code)]

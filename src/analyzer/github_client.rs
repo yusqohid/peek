@@ -26,7 +26,10 @@ impl GitHubClient {
         base_url: String,
     ) -> Result<Self, String> {
         let mut headers = HeaderMap::new();
-        headers.insert(USER_AGENT, HeaderValue::from_static("peek-tui/0.3.0"));
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_static(concat!("peek-tui/", env!("CARGO_PKG_VERSION"))),
+        );
         headers.insert(
             "Accept",
             HeaderValue::from_static("application/vnd.github+json"),
@@ -53,15 +56,26 @@ impl GitHubClient {
     }
 
     /// Fetch user profile, recent activity events, and top updated repos.
+    ///
+    /// Events/repos failures are recorded (not swallowed) so the UI can tell
+    /// "failed to load" apart from "no activity".
     pub async fn fetch_all(&self) -> Result<GitHubData, String> {
         let user = self.fetch_user().await?;
-        let events = self.fetch_events().await.unwrap_or_default();
-        let repos = self.fetch_repos().await.unwrap_or_default();
+        let (events, events_error) = match self.fetch_events().await {
+            Ok(events) => (events, None),
+            Err(e) => (Vec::new(), Some(e)),
+        };
+        let (repos, repos_error) = match self.fetch_repos().await {
+            Ok(repos) => (repos, None),
+            Err(e) => (Vec::new(), Some(e)),
+        };
 
         Ok(GitHubData {
             user: Some(user),
             events,
             repos,
+            events_error,
+            repos_error,
             last_fetched: Some(Local::now()),
             is_loading: false,
             error_message: None,
@@ -109,8 +123,9 @@ impl GitHubClient {
             .await
             .map_err(|e| format!("Network error fetching events: {e}"))?;
 
-        if !resp.status().is_success() {
-            return Ok(Vec::new());
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!("GitHub events error: HTTP {status}"));
         }
 
         let items: Vec<Value> = resp
@@ -133,8 +148,9 @@ impl GitHubClient {
             .await
             .map_err(|e| format!("Network error fetching repos: {e}"))?;
 
-        if !resp.status().is_success() {
-            return Ok(Vec::new());
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!("GitHub repos error: HTTP {status}"));
         }
 
         let items: Vec<Value> = resp
@@ -357,6 +373,8 @@ mod tests {
         assert_eq!(data.repos.len(), 1);
         assert_eq!(data.repos[0].name, "hello");
         assert_eq!(data.repos[0].stars, 5);
+        assert!(data.events_error.is_none());
+        assert!(data.repos_error.is_none());
 
         handle.join().expect("mock should finish");
     }
@@ -397,7 +415,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn returns_empty_events_and_repos_when_server_errors() {
+    async fn records_partial_errors_when_server_errors() {
         let (base, handle) = start_mock((200, USER_JSON), (500, "boom"), (500, "boom"), 3);
         let client = client_with(&base);
 
@@ -405,6 +423,16 @@ mod tests {
 
         assert!(data.events.is_empty());
         assert!(data.repos.is_empty());
+        assert!(
+            data.events_error.as_deref().unwrap_or("").contains("500"),
+            "events error should be recorded: {:?}",
+            data.events_error
+        );
+        assert!(
+            data.repos_error.as_deref().unwrap_or("").contains("500"),
+            "repos error should be recorded: {:?}",
+            data.repos_error
+        );
         handle.join().expect("mock should finish");
     }
 

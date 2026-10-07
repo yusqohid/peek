@@ -23,7 +23,7 @@ Built with 🦀 **Rust**, **Ratatui**, and **Crossterm**.
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/peek.git
+git clone https://github.com/yusqohid/peek.git
 cd peek
 
 # Build with Cargo
@@ -61,6 +61,10 @@ peek --path ~/Dev --depth 2 --github-user yourusername
 | `Enter` | Open selected project detail view |
 | `Esc` / `Backspace`| Return to project list from detail |
 | `s` | Cycle sort order (Name → LOC → Commits → Recent) |
+| `d` | Toggle sort direction (ascending / descending) |
+| `/` | Filter projects by name (`Enter` apply, `Esc` clear) |
+| `g` / `Home` | Go to top |
+| `G` / `End` | Go to bottom |
 | `i` | Toggle ignored projects visibility |
 | `r` | Rescan workspace and refresh GitHub data |
 | `q` / `Ctrl+C` | Quit |
@@ -75,6 +79,10 @@ Copy `config.example.toml` to `config.toml` to customize settings:
 [general]
 scan_directory = "~/Dev"
 scan_depth = 3
+refresh_interval_secs = 300  # background auto-refresh; 0 disables it
+
+[display]
+default_tab = "dashboard"  # dashboard | projects | github | help
 
 [analysis]
 exclude_dirs = ["node_modules", "target", "dist", "build", ".git", ".venv", "venv"]
@@ -84,6 +92,30 @@ ignored_projects = ["mock-project", "temp-experiment"]
 username = "yourusername"
 # token = "ghp_yourToken" # or set via GITHUB_TOKEN environment variable
 ```
+
+> ⚠️ `config.toml` is git-ignored — never commit it with a real token inside.
+> Prefer the `GITHUB_TOKEN` environment variable over storing a token in the file.
+
+---
+
+## 🖥️ Terminal & Font Requirements
+
+- A terminal with Unicode support. Project types, activity, and GitHub events
+  render with emoji (🦀 📦 🐍 …), so no Nerd Font is required.
+- If glyphs show as boxes, switch the terminal font to one with good emoji
+  coverage (e.g. Noto Color Emoji) or a Nerd Font.
+- Narrow terminals (< 80 columns) automatically get a compact project table.
+
+---
+
+## 🐙 GitHub Data Notes
+
+- Only **public** data is read via the unauthenticated REST API:
+  user profile, public events (`/events/public`), and public repos.
+- Rate limits apply (60 req/hour without a token). Set `GITHUB_TOKEN`
+  (or `[github] token`) to raise the quota; when the limit is hit the
+  GitHub tab shows a rate-limit error with a retry hint.
+- The activity feed covers roughly the last 30 days of public events.
 
 ---
 

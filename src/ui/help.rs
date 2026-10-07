@@ -17,7 +17,11 @@ pub fn render(f: &mut Frame, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                "  v0.3.0 — Friendly Developer Project Analyzer",
+                concat!(
+                    "  v",
+                    env!("CARGO_PKG_VERSION"),
+                    " — Friendly Developer Project Analyzer"
+                ),
                 Style::default().fg(Color::DarkGray),
             ),
         ]),
@@ -49,6 +53,8 @@ pub fn render(f: &mut Frame, area: Rect) {
         key_line("g / Home", "Go to top"),
         key_line("G / End", "Go to bottom"),
         key_line("s", "Cycle sort order (Name → LOC → Commits → Recent)"),
+        key_line("d", "Toggle sort direction (ascending / descending)"),
+        key_line("/", "Filter projects by name (Enter apply, Esc clear)"),
         key_line("i", "Toggle ignored projects visibility"),
         Line::from(""),
         Line::from(Span::styled(

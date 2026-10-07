@@ -31,7 +31,6 @@ pub struct GeneralConfig {
 
     /// Auto-refresh interval in seconds.
     #[serde(default = "default_refresh")]
-    #[allow(dead_code)]
     pub refresh_interval_secs: u64,
 }
 
