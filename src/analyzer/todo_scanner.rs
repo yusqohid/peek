@@ -27,7 +27,11 @@ const SCANNABLE_EXTENSIONS: &[&str] = &[
     "swift", "kt", "scala", "dart", "sh", "bash", "zsh", "lua", "zig",
 ];
 
-/// Scan source files in `root` for TODO, FIXME, HACK, and BUG comments.
+/// Scan source files in `root` for TODO, FIXME, HACK, and BUG markers.
+///
+/// Contract: plain-text matching — markers count anywhere in a scannable
+/// source file, not only inside comments. Matching is on whole words, so
+/// `debug:` does not count as BUG.
 pub fn scan_todos(root: &Path, exclude_dirs: &[String]) -> TodoStats {
     let mut stats = TodoStats::default();
 
@@ -64,23 +68,51 @@ pub fn scan_todos(root: &Path, exclude_dirs: &[String]) -> TodoStats {
         if let Ok(file) = File::open(path) {
             let reader = BufReader::new(file);
             for line_res in reader.lines() {
-                let Ok(line) = line_res else { break };
-                let upper = line.to_uppercase();
-
-                if upper.contains("TODO:") || upper.contains("TODO ") {
-                    stats.todo_count += 1;
-                } else if upper.contains("FIXME:") || upper.contains("FIXME ") {
-                    stats.fixme_count += 1;
-                } else if upper.contains("HACK:") || upper.contains("HACK ") {
-                    stats.hack_count += 1;
-                } else if upper.contains("BUG:") || upper.contains("BUG ") {
-                    stats.bug_count += 1;
+                let Ok(line) = line_res else { continue };
+                match classify_line(&line) {
+                    Some(Marker::Todo) => stats.todo_count += 1,
+                    Some(Marker::Fixme) => stats.fixme_count += 1,
+                    Some(Marker::Hack) => stats.hack_count += 1,
+                    Some(Marker::Bug) => stats.bug_count += 1,
+                    None => {}
                 }
             }
         }
     }
 
     stats
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Marker {
+    Todo,
+    Fixme,
+    Hack,
+    Bug,
+}
+
+/// First marker whose whole word appears in `line` (case-insensitive).
+///
+/// Splitting on non-alphanumeric characters gives word boundaries, so
+/// `debug:` yields the token `DEBUG` — not `BUG`.
+fn classify_line(line: &str) -> Option<Marker> {
+    let upper = line.to_uppercase();
+    let mut found = None;
+    for token in upper.split(|c: char| !c.is_alphanumeric()) {
+        let marker = match token {
+            "TODO" => Marker::Todo,
+            "FIXME" => Marker::Fixme,
+            "HACK" => Marker::Hack,
+            "BUG" => Marker::Bug,
+            _ => continue,
+        };
+        // Keep the same priority as before: TODO > FIXME > HACK > BUG.
+        let rank = marker as u8;
+        if found.is_none_or(|m: Marker| rank < m as u8) {
+            found = Some(marker);
+        }
+    }
+    found
 }
 
 #[cfg(test)]
@@ -117,6 +149,33 @@ mod tests {
         assert_eq!(stats.hack_count, 1);
         assert_eq!(stats.bug_count, 1);
         assert_eq!(stats.total(), 4);
+    }
+
+    #[test]
+    fn debug_line_is_not_counted_as_bug() {
+        assert_eq!(classify_line("// debug: verbose logging"), None);
+        assert_eq!(classify_line("log::debug!(\"hi\")"), None);
+        assert_eq!(classify_line("// BUG: tracked"), Some(Marker::Bug));
+        assert_eq!(classify_line("// TODO implement"), Some(Marker::Todo));
+        assert_eq!(classify_line("// FIXME"), Some(Marker::Fixme));
+    }
+
+    #[test]
+    fn invalid_utf8_lines_do_not_stop_the_scan() {
+        use std::io::Write;
+        let dir = tempdir();
+        let root = dir.path();
+        // Line 1: invalid UTF-8, line 2: real marker, line 3: debug: (no match).
+        let mut bytes = vec![0xff, 0xfe, b'\n'];
+        bytes.extend_from_slice(b"// TODO: after bad line\n// debug: noise\n");
+        let mut file = fs::File::create(root.join("bad.rs")).expect("fixture should be created");
+        file.write_all(&bytes).expect("fixture should be written");
+
+        let stats = scan_todos(root, &[]);
+
+        assert_eq!(stats.todo_count, 1);
+        assert_eq!(stats.bug_count, 0);
+        assert_eq!(stats.total(), 1);
     }
 
     #[test]
