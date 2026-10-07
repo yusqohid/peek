@@ -8,11 +8,11 @@ scan_directory = "~/Dev"
 # How deep to scan for projects (max directory depth)
 scan_depth = 3
 
-# Refresh interval in seconds (for future auto-refresh)
+# Refresh interval in seconds (background auto-refresh; 0 disables it)
 refresh_interval_secs = 300
 
 [display]
-# Default tab on startup: "dashboard", "projects"
+# Default tab on startup: "dashboard", "projects", "github", "help"
 default_tab = "dashboard"
 
 [analysis]

@@ -26,7 +26,10 @@ impl GitHubClient {
         base_url: String,
     ) -> Result<Self, String> {
         let mut headers = HeaderMap::new();
-        headers.insert(USER_AGENT, HeaderValue::from_static("peek-tui/0.3.0"));
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_static(concat!("peek-tui/", env!("CARGO_PKG_VERSION"))),
+        );
         headers.insert(
             "Accept",
             HeaderValue::from_static("application/vnd.github+json"),
