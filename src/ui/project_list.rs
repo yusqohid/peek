@@ -2,13 +2,59 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Cell, Row, Table, TableState},
+    text::{Line, Span},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
 };
 
 use crate::app::App;
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
+    if let Some(err) = &app.scan_error {
+        render_message(
+            f,
+            area,
+            " 📁 Projects ",
+            vec![
+                Line::from(Span::styled(
+                    "Scan failed",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(err.as_str()),
+                Line::from(""),
+                Line::from("Check general.scan_directory in config, then press [r] to retry."),
+            ],
+        );
+        return;
+    }
+
     let visible = app.visible_projects();
+    if visible.is_empty() {
+        let scan_dir = app.config.resolved_scan_directory();
+        render_message(
+            f,
+            area,
+            " 📁 Projects ",
+            vec![
+                Line::from(Span::styled(
+                    "No projects found",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(format!("Scanned: {}", scan_dir.display())),
+                Line::from(
+                    "No known project markers (Cargo.toml, package.json, go.mod, …) were found.",
+                ),
+                Line::from(""),
+                Line::from(
+                    "Try a different directory or depth, then press [r] to rescan. Toggle ignored with [i].",
+                ),
+            ],
+        );
+        return;
+    }
 
     let header = Row::new(vec![
         Cell::from(" #"),
@@ -106,6 +152,13 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     state.select(Some(app.selected_project));
 
     f.render_stateful_widget(table, area, &mut state);
+}
+
+fn render_message(f: &mut Frame, area: Rect, title: &str, lines: Vec<Line<'_>>) {
+    let paragraph = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .wrap(Wrap { trim: true });
+    f.render_widget(paragraph, area);
 }
 
 fn format_number(n: usize) -> String {
