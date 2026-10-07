@@ -62,11 +62,3 @@ pub struct GitStats {
     /// Active git branch name, if known.
     pub current_branch: Option<String>,
 }
-
-impl GitStats {
-    /// Total commits in the past 52 weeks.
-    #[allow(dead_code)]
-    pub fn commits_last_52_weeks(&self) -> usize {
-        self.daily_activity.iter().sum()
-    }
-}

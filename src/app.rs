@@ -1,8 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::analyzer::{
-    code_stats, git_analyzer, github_client::GitHubClient, scanner, todo_scanner,
-};
 use crate::cache::AnalysisCache;
 use crate::config::AppConfig;
 use crate::model::github::GitHubData;
@@ -307,87 +304,6 @@ impl App {
         self.github_rx = Some(rx);
         let token = self.config.github.resolved_token();
         std::thread::spawn(move || run_github_fetch(username, token, tx));
-    }
-
-    /// Run the initial project scan, code analysis, git analysis, and technical debt scan.
-    #[allow(dead_code)]
-    pub fn scan_and_analyze(&mut self) {
-        self.is_loading = true;
-        self.scan_error = None;
-        self.status_message = "Scanning projects…".to_string();
-
-        let scan_dir = self.config.resolved_scan_directory();
-        if let Err(message) = check_scan_directory(&scan_dir) {
-            self.projects.clear();
-            self.selected_project = 0;
-            self.is_loading = false;
-            self.scan_error = Some(message.clone());
-            self.status_message = message;
-            return;
-        }
-        let depth = self.config.general.scan_depth;
-
-        self.projects = scanner::scan_projects(&scan_dir, depth, &self.config.analysis);
-
-        // Analyze code stats, git history, and todo markers for each non-ignored project.
-        let total = self.projects.len();
-        for (i, project) in self.projects.iter_mut().enumerate() {
-            if project.ignored {
-                continue;
-            }
-            self.status_message = format!("Analyzing [{}/{}] {}…", i + 1, total, project.name);
-            project.code_stats = Some(code_stats::analyze(&project.path, &self.config.analysis));
-            project.git_stats = git_analyzer::analyze_git(&project.path);
-            project.todo_stats = Some(todo_scanner::scan_todos(
-                &project.path,
-                &self.config.analysis.exclude_dirs,
-            ));
-            if let Some(git) = &project.git_stats
-                && let Some(last) = &git.last_commit
-            {
-                project.last_modified = Some(last.timestamp);
-            }
-        }
-
-        self.apply_sort();
-        self.is_loading = false;
-        let active = self.visible_projects().len();
-        if self.projects.is_empty() {
-            self.status_message = format!("No projects found in {}", scan_dir.display());
-        } else {
-            self.status_message = format!("Found {active} projects");
-        }
-    }
-
-    /// Fetch remote GitHub data if username is configured.
-    #[allow(dead_code)]
-    pub fn fetch_github(&mut self) {
-        let username = self.config.github.username.trim().to_string();
-        if username.is_empty() {
-            return;
-        }
-
-        self.github_data.is_loading = true;
-        let token = self.config.github.resolved_token();
-        match GitHubClient::new(username, token) {
-            Ok(client) => {
-                if let Ok(rt) = tokio::runtime::Runtime::new() {
-                    match rt.block_on(client.fetch_all()) {
-                        Ok(data) => {
-                            self.github_data = data;
-                        }
-                        Err(e) => {
-                            self.github_data.error_message = Some(e);
-                            self.github_data.is_loading = false;
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                self.github_data.error_message = Some(e);
-                self.github_data.is_loading = false;
-            }
-        }
     }
 
     /// Count projects with no commits in the last 30 days.
@@ -824,6 +740,18 @@ mod tests {
         App::new(config)
     }
 
+    /// Drive a real background scan to completion (bounded wait for tests).
+    fn run_scan_to_completion(app: &mut App) {
+        for _ in 0..500 {
+            app.poll_background();
+            if app.scan_rx.is_none() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("background scan did not finish in time");
+    }
+
     #[test]
     fn missing_scan_directory_sets_scan_error() {
         let missing = std::env::temp_dir().join(format!(
@@ -836,7 +764,7 @@ mod tests {
         ));
         let mut app = app_with_scan_dir(&missing.to_string_lossy());
 
-        app.scan_and_analyze();
+        app.start_scan();
 
         assert!(app.projects.is_empty());
         assert_eq!(app.selected_project, 0);
@@ -856,7 +784,7 @@ mod tests {
         std::fs::write(&file, "x").expect("file should be written");
         let mut app = app_with_scan_dir(&file.to_string_lossy());
 
-        app.scan_and_analyze();
+        app.start_scan();
 
         assert!(app.projects.is_empty());
         let err = app.scan_error.expect("scan_error should be set");
@@ -872,7 +800,8 @@ mod tests {
         let mut app = app_with_scan_dir(&dir.path().to_string_lossy());
         app.scan_error = Some("stale".to_string());
 
-        app.scan_and_analyze();
+        app.start_scan();
+        run_scan_to_completion(&mut app);
 
         assert!(app.projects.is_empty());
         assert!(app.scan_error.is_none());

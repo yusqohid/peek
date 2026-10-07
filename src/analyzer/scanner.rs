@@ -106,17 +106,6 @@ fn detect_project_type(dir: &Path) -> Option<(PathBuf, &'static ProjectType)> {
     None
 }
 
-/// Convenience: resolve a path that may start with `~`.
-#[allow(dead_code)]
-pub fn resolve_path(path: &str) -> PathBuf {
-    if let Some(stripped) = path.strip_prefix("~/")
-        && let Some(home) = dirs::home_dir()
-    {
-        return home.join(stripped);
-    }
-    PathBuf::from(path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -11,7 +11,6 @@ use crate::model::project::ProjectInfo;
 
 /// Progress events sent from the scan worker thread to the UI thread.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum ScanEvent {
     Started {
         total: usize,
@@ -26,6 +25,7 @@ pub enum ScanEvent {
         cache: AnalysisCache,
         cached: usize,
     },
+    #[allow(dead_code)]
     Failed {
         message: String,
     },
