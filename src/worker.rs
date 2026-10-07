@@ -4,6 +4,7 @@ use std::sync::mpsc::Sender;
 use crate::analyzer::{
     code_stats, git_analyzer, github_client::GitHubClient, scanner, todo_scanner,
 };
+use crate::cache::{AnalysisCache, cache_key_for, git_head_oid};
 use crate::config::AnalysisConfig;
 use crate::model::github::GitHubData;
 use crate::model::project::ProjectInfo;
@@ -22,6 +23,8 @@ pub enum ScanEvent {
     },
     Finished {
         projects: Vec<ProjectInfo>,
+        cache: AnalysisCache,
+        cached: usize,
     },
     Failed {
         message: String,
@@ -40,12 +43,20 @@ pub enum GithubEvent {
 /// Sends `Started`, per-project `ProjectDone`, and a terminal `Finished`.
 /// Any panic-worthy input should be validated before spawning; failures inside
 /// are reported as `Failed` instead of panicking the worker.
-pub fn run_scan(scan_dir: PathBuf, depth: usize, analysis: AnalysisConfig, tx: Sender<ScanEvent>) {
+pub fn run_scan(
+    scan_dir: PathBuf,
+    depth: usize,
+    analysis: AnalysisConfig,
+    cache: AnalysisCache,
+    tx: Sender<ScanEvent>,
+) {
     let projects = scanner::scan_projects(&scan_dir, depth, &analysis);
     let total = projects.len();
     let _ = tx.send(ScanEvent::Started { total });
 
     let mut projects = projects;
+    let mut cache = cache;
+    let mut cached = 0usize;
     for (i, project) in projects.iter_mut().enumerate() {
         if project.ignored {
             continue;
@@ -55,6 +66,19 @@ pub fn run_scan(scan_dir: PathBuf, depth: usize, analysis: AnalysisConfig, tx: S
             total,
             name: project.name.clone(),
         });
+
+        let marker_modified = project.last_modified;
+        let git_head = git_head_oid(&project.path);
+        let key = cache_key_for(marker_modified, git_head);
+        if let Some(hit) = cache.get(&project.path, &key) {
+            project.code_stats = hit.code_stats.clone();
+            project.git_stats = hit.git_stats.clone();
+            project.todo_stats = hit.todo_stats.clone();
+            project.last_modified = hit.last_modified;
+            cached += 1;
+            continue;
+        }
+
         project.code_stats = Some(code_stats::analyze(&project.path, &analysis));
         project.git_stats = git_analyzer::analyze_git(&project.path);
         project.todo_stats = Some(todo_scanner::scan_todos(
@@ -66,9 +90,21 @@ pub fn run_scan(scan_dir: PathBuf, depth: usize, analysis: AnalysisConfig, tx: S
         {
             project.last_modified = Some(last.timestamp);
         }
+        cache.insert(
+            project.path.clone(),
+            key,
+            project.code_stats.clone(),
+            project.git_stats.clone(),
+            project.todo_stats.clone(),
+            project.last_modified,
+        );
     }
 
-    let _ = tx.send(ScanEvent::Finished { projects });
+    let _ = tx.send(ScanEvent::Finished {
+        projects,
+        cache,
+        cached,
+    });
 }
 
 /// Blocking GitHub fetch run on a worker thread (builds its own runtime).
@@ -84,4 +120,69 @@ pub fn run_github_fetch(username: String, token: Option<String>, tx: Sender<Gith
         Err(e) => GithubEvent::Failed(e),
     };
     let _ = tx.send(event);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AnalysisConfig;
+
+    fn drain(
+        tx_rx: std::sync::mpsc::Receiver<ScanEvent>,
+    ) -> (Vec<ProjectInfo>, AnalysisCache, usize) {
+        let mut finished = None;
+        for ev in tx_rx {
+            if let ScanEvent::Finished {
+                projects,
+                cache,
+                cached,
+            } = ev
+            {
+                finished = Some((projects, cache, cached));
+                break;
+            }
+        }
+        finished.expect("Finished should be sent")
+    }
+
+    #[test]
+    fn second_scan_reuses_cache_for_unchanged_project() {
+        let dir = tempfile::Builder::new()
+            .prefix("peek-test-")
+            .tempdir()
+            .expect("tempdir should be created");
+        let proj = dir.path().join("demo");
+        std::fs::create_dir_all(&proj).expect("proj should be created");
+        std::fs::write(proj.join("Cargo.toml"), "[package]\nname=\"demo\"")
+            .expect("marker should be written");
+        std::fs::write(proj.join("main.rs"), "fn main() {}\n").expect("source should be written");
+        let analysis = AnalysisConfig {
+            exclude_dirs: vec![],
+            ignored_projects: vec![],
+        };
+
+        let (tx1, rx1) = std::sync::mpsc::channel();
+        run_scan(
+            dir.path().to_path_buf(),
+            3,
+            analysis.clone(),
+            AnalysisCache::default(),
+            tx1,
+        );
+        let (projects1, cache1, cached1) = drain(rx1);
+        assert_eq!(projects1.len(), 1);
+        assert_eq!(cached1, 0);
+        assert_eq!(cache1.len(), 1);
+
+        let (tx2, rx2) = std::sync::mpsc::channel();
+        run_scan(dir.path().to_path_buf(), 3, analysis, cache1, tx2);
+        let (projects2, cache2, cached2) = drain(rx2);
+        assert_eq!(projects2.len(), 1);
+        assert_eq!(cached2, 1);
+        assert_eq!(cache2.len(), 1);
+        assert_eq!(
+            projects2[0].code_stats.as_ref().map(|s| s.code_lines),
+            projects1[0].code_stats.as_ref().map(|s| s.code_lines)
+        );
+    }
 }
