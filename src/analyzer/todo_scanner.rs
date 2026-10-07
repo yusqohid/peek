@@ -86,13 +86,38 @@ pub fn scan_todos(root: &Path, exclude_dirs: &[String]) -> TodoStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     #[test]
-    fn test_scan_todos_current_repo() {
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let stats = scan_todos(&manifest_dir, &["target".to_string()]);
-        // Validates that the scanner runs without crashing
-        assert!(stats.total() >= 0);
+    fn counts_markers_in_source_files_and_skips_excluded_directories() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("peek-todo-scanner-{}-{unique}", std::process::id()));
+        fs::create_dir_all(root.join("excluded")).expect("fixture directory should be created");
+        fs::write(
+            root.join("main.rs"),
+            "// TODO: implement\n// FIXME: repair\n// HACK: temporary\n// BUG: tracked\n",
+        )
+        .expect("fixture source should be written");
+        fs::write(root.join("notes.txt"), "TODO: non-source file")
+            .expect("fixture note should be written");
+        fs::write(root.join("excluded/ignored.rs"), "// TODO: excluded")
+            .expect("excluded source should be written");
+
+        let stats = scan_todos(&root, &["excluded".to_string()]);
+
+        assert_eq!(stats.todo_count, 1);
+        assert_eq!(stats.fixme_count, 1);
+        assert_eq!(stats.hack_count, 1);
+        assert_eq!(stats.bug_count, 1);
+        assert_eq!(stats.total(), 4);
+
+        fs::remove_dir_all(root).expect("fixture directory should be removed");
     }
 }
