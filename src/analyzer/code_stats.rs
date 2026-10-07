@@ -57,25 +57,31 @@ pub fn analyze(project_path: &Path, config: &AnalysisConfig) -> CodeStats {
     let mut languages = tokei::Languages::new();
     languages.get_statistics(&[project_path], &excluded, &tokei_config);
 
-    let mut lang_stats: Vec<LanguageStat> = languages
-        .iter()
-        .filter(|(lang_type, lang)| {
-            let name = lang_type.to_string();
-            !is_ignored_language(&name) && (lang.code > 0 || lang.comments > 0)
-        })
-        .map(|(lang_type, lang)| {
-            let reports = &lang.children;
-            let file_count = lang.reports.len() + reports.values().map(|v| v.len()).sum::<usize>();
+    // Keep only programming languages; every aggregate below — including
+    // `total_bytes` — is computed from this same set so the numbers agree.
+    let mut lang_stats: Vec<LanguageStat> = Vec::new();
+    let mut total_bytes: u64 = 0;
+    for (lang_type, lang) in languages.iter() {
+        let name = lang_type.to_string();
+        if is_ignored_language(&name) || (lang.code == 0 && lang.comments == 0) {
+            continue;
+        }
+        let reports = &lang.children;
+        let file_count = lang.reports.len() + reports.values().map(|v| v.len()).sum::<usize>();
+        total_bytes += lang
+            .reports
+            .iter()
+            .filter_map(|report| std::fs::metadata(&report.name).ok().map(|m| m.len()))
+            .sum::<u64>();
 
-            LanguageStat {
-                name: lang_type.to_string(),
-                code_lines: lang.code,
-                comment_lines: lang.comments,
-                blank_lines: lang.blanks,
-                file_count,
-            }
-        })
-        .collect();
+        lang_stats.push(LanguageStat {
+            name,
+            code_lines: lang.code,
+            comment_lines: lang.comments,
+            blank_lines: lang.blanks,
+            file_count,
+        });
+    }
 
     // Sort by code lines descending so the primary language comes first.
     lang_stats.sort_by_key(|a| std::cmp::Reverse(a.code_lines));
@@ -84,13 +90,6 @@ pub fn analyze(project_path: &Path, config: &AnalysisConfig) -> CodeStats {
     let comment_lines: usize = lang_stats.iter().map(|l| l.comment_lines).sum();
     let blank_lines: usize = lang_stats.iter().map(|l| l.blank_lines).sum();
     let file_count: usize = lang_stats.iter().map(|l| l.file_count).sum();
-
-    // Estimate total bytes from the source reports.
-    let total_bytes: u64 = languages
-        .values()
-        .flat_map(|lang| lang.reports.iter())
-        .filter_map(|report| std::fs::metadata(&report.name).ok().map(|m| m.len()))
-        .sum();
 
     CodeStats {
         code_lines,
@@ -105,6 +104,7 @@ pub fn analyze(project_path: &Path, config: &AnalysisConfig) -> CodeStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::path::PathBuf;
 
     #[test]
@@ -127,6 +127,30 @@ mod tests {
                 lang.name
             );
         }
+    }
+
+    #[test]
+    fn total_bytes_only_counts_programming_languages() {
+        let dir = tempfile::Builder::new()
+            .prefix("peek-test-")
+            .tempdir()
+            .expect("tempdir should be created");
+        let rs_content = "fn main() {\n    println!(\"hi\");\n}\n";
+        fs::write(dir.path().join("main.rs"), rs_content).expect("rs should be written");
+        let json_content = serde_json::json!({"key": "value", "n": 1}).to_string();
+        fs::write(dir.path().join("data.json"), &json_content).expect("json should be written");
+        let config = AnalysisConfig {
+            exclude_dirs: vec![],
+            ignored_projects: vec![],
+        };
+
+        let stats = analyze(dir.path(), &config);
+
+        assert!(stats.languages.iter().all(|l| l.name == "Rust"));
+        let rs_len = std::fs::metadata(dir.path().join("main.rs"))
+            .expect("metadata should exist")
+            .len();
+        assert_eq!(stats.total_bytes, rs_len);
     }
 
     #[test]
