@@ -387,6 +387,9 @@ impl App {
             }
             KeyCode::Char('i') => {
                 self.show_ignored = !self.show_ignored;
+                self.selected_project = self
+                    .selected_project
+                    .min(self.visible_projects().len().saturating_sub(1));
                 self.status_message = if self.show_ignored {
                     "Showing ignored projects".to_string()
                 } else {
@@ -417,5 +420,42 @@ impl App {
         }
         // Reset selection after re-sorting.
         self.selected_project = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::model::project::ProjectType;
+
+    #[test]
+    fn hiding_ignored_projects_clamps_the_selected_row() {
+        let mut app = App::new(AppConfig::default());
+        app.active_tab = ActiveTab::Projects;
+        app.projects = vec![
+            ProjectInfo::new(
+                "active".to_string(),
+                PathBuf::from("/active"),
+                ProjectType::Rust,
+            ),
+            ProjectInfo {
+                ignored: true,
+                ..ProjectInfo::new(
+                    "ignored".to_string(),
+                    PathBuf::from("/ignored"),
+                    ProjectType::Rust,
+                )
+            },
+        ];
+        app.show_ignored = true;
+        app.selected_project = 1;
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+
+        assert!(!app.show_ignored);
+        assert_eq!(app.visible_projects().len(), 1);
+        assert_eq!(app.selected_project, 0);
     }
 }

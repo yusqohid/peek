@@ -45,7 +45,7 @@ pub fn scan_projects(root: &Path, max_depth: usize, config: &AnalysisConfig) -> 
 
         let dir_path = entry.path();
 
-        if let Some((marker, ptype)) = detect_project_type(dir_path) {
+        if let Some((marker_path, ptype)) = detect_project_type(dir_path) {
             // Avoid registering a sub-project that lives inside an
             // already-detected project (e.g. workspace members).
             let dominated = projects.iter().any(|p| dir_path.starts_with(&p.path));
@@ -56,7 +56,7 @@ pub fn scan_projects(root: &Path, max_depth: usize, config: &AnalysisConfig) -> 
             let name = dir_path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| marker.to_string());
+                .unwrap_or_else(|| marker_path.display().to_string());
 
             let rel_path = dir_path
                 .strip_prefix(root)
@@ -71,7 +71,7 @@ pub fn scan_projects(root: &Path, max_depth: usize, config: &AnalysisConfig) -> 
             info.ignored = ignored;
 
             // Try to get a last-modified timestamp from the marker file.
-            if let Ok(meta) = std::fs::metadata(dir_path.join(marker))
+            if let Ok(meta) = std::fs::metadata(&marker_path)
                 && let Ok(modified) = meta.modified()
             {
                 info.last_modified = Some(modified.into());
@@ -87,20 +87,20 @@ pub fn scan_projects(root: &Path, max_depth: usize, config: &AnalysisConfig) -> 
 }
 
 /// Check whether `dir` contains one of the known project marker files and
-/// return the marker filename together with the detected project type.
-fn detect_project_type(dir: &Path) -> Option<(&'static str, &'static ProjectType)> {
+/// return the marker path together with the detected project type.
+fn detect_project_type(dir: &Path) -> Option<(PathBuf, &'static ProjectType)> {
     for (marker, ptype) in PROJECT_MARKERS {
         if let Some(ext) = marker.strip_prefix('*') {
             // Glob pattern (e.g. *.csproj) — check if any file matches.
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for e in entries.flatten() {
                     if e.file_name().to_string_lossy().ends_with(ext) {
-                        return Some((marker, ptype));
+                        return Some((e.path(), ptype));
                     }
                 }
             }
         } else if dir.join(marker).exists() {
-            return Some((marker, ptype));
+            return Some((dir.join(marker), ptype));
         }
     }
     None
@@ -120,6 +120,19 @@ pub fn resolve_path(path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temporary_directory(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "peek-scanner-{label}-{}-{unique}",
+            std::process::id()
+        ))
+    }
 
     #[test]
     fn test_scan_current_directory() {
@@ -149,5 +162,22 @@ mod tests {
         let projects = scan_projects(&manifest_dir, 2, &config);
         assert!(!projects.is_empty());
         assert!(projects[0].ignored, "Project should be marked as ignored");
+    }
+
+    #[test]
+    fn detects_csharp_project_and_uses_the_matched_marker_timestamp() {
+        let root = temporary_directory("csharp");
+        let project_dir = root.join("example");
+        fs::create_dir_all(&project_dir).expect("fixture directory should be created");
+        fs::write(project_dir.join("example.csproj"), "<Project />")
+            .expect("C# marker should be written");
+
+        let projects = scan_projects(&root, 2, &AnalysisConfig::default());
+
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].project_type, ProjectType::CSharp);
+        assert!(projects[0].last_modified.is_some());
+
+        fs::remove_dir_all(root).expect("fixture directory should be removed");
     }
 }
