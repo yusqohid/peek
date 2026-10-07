@@ -1,5 +1,9 @@
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc::Sender,
+};
 
 use crate::analyzer::{
     code_stats, git_analyzer, github_client::GitHubClient, scanner, todo_scanner,
@@ -29,6 +33,8 @@ pub enum ScanEvent {
     Failed {
         message: String,
     },
+    /// A newer scan superseded this one; the worker stopped early.
+    Cancelled,
 }
 
 /// Result sent from the GitHub worker thread to the UI thread.
@@ -41,13 +47,16 @@ pub enum GithubEvent {
 /// Blocking scan + per-project analysis run on a worker thread.
 ///
 /// Sends `Started`, per-project `ProjectDone`, and a terminal `Finished`.
-/// Any panic-worthy input should be validated before spawning; failures inside
-/// are reported as `Failed` instead of panicking the worker.
+/// Checks `cancel` between projects and stops early with `Cancelled` when a
+/// newer scan has superseded this one. Any panic-worthy input should be
+/// validated before spawning; failures inside are reported as `Failed`
+/// instead of panicking the worker.
 pub fn run_scan(
     scan_dir: PathBuf,
     depth: usize,
     analysis: AnalysisConfig,
     cache: AnalysisCache,
+    cancel: Arc<AtomicBool>,
     tx: Sender<ScanEvent>,
 ) {
     let projects = scanner::scan_projects(&scan_dir, depth, &analysis);
@@ -58,6 +67,10 @@ pub fn run_scan(
     let mut cache = cache;
     let mut cached = 0usize;
     for (i, project) in projects.iter_mut().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = tx.send(ScanEvent::Cancelled);
+            return;
+        }
         if project.ignored {
             continue;
         }
@@ -145,6 +158,10 @@ mod tests {
         finished.expect("Finished should be sent")
     }
 
+    fn no_cancel() -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(false))
+    }
+
     #[test]
     fn second_scan_reuses_cache_for_unchanged_project() {
         let dir = tempfile::Builder::new()
@@ -167,6 +184,7 @@ mod tests {
             3,
             analysis.clone(),
             AnalysisCache::default(),
+            no_cancel(),
             tx1,
         );
         let (projects1, cache1, cached1) = drain(rx1);
@@ -175,7 +193,14 @@ mod tests {
         assert_eq!(cache1.len(), 1);
 
         let (tx2, rx2) = std::sync::mpsc::channel();
-        run_scan(dir.path().to_path_buf(), 3, analysis, cache1, tx2);
+        run_scan(
+            dir.path().to_path_buf(),
+            3,
+            analysis,
+            cache1,
+            no_cancel(),
+            tx2,
+        );
         let (projects2, cache2, cached2) = drain(rx2);
         assert_eq!(projects2.len(), 1);
         assert_eq!(cached2, 1);
@@ -184,5 +209,44 @@ mod tests {
             projects2[0].code_stats.as_ref().map(|s| s.code_lines),
             projects1[0].code_stats.as_ref().map(|s| s.code_lines)
         );
+    }
+
+    #[test]
+    fn cancelled_scan_stops_without_finishing() {
+        let dir = tempfile::Builder::new()
+            .prefix("peek-test-")
+            .tempdir()
+            .expect("tempdir should be created");
+        let proj = dir.path().join("demo");
+        std::fs::create_dir_all(&proj).expect("proj should be created");
+        std::fs::write(proj.join("Cargo.toml"), "[package]\nname=\"demo\"")
+            .expect("marker should be written");
+        let analysis = AnalysisConfig {
+            exclude_dirs: vec![],
+            ignored_projects: vec![],
+        };
+
+        let cancel = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = std::sync::mpsc::channel();
+        run_scan(
+            dir.path().to_path_buf(),
+            3,
+            analysis,
+            AnalysisCache::default(),
+            cancel,
+            tx,
+        );
+
+        let mut saw_cancelled = false;
+        let mut saw_finished = false;
+        for ev in rx {
+            match ev {
+                ScanEvent::Cancelled => saw_cancelled = true,
+                ScanEvent::Finished { .. } => saw_finished = true,
+                _ => {}
+            }
+        }
+        assert!(saw_cancelled, "cancelled worker should report Cancelled");
+        assert!(!saw_finished, "cancelled worker must not finish");
     }
 }
