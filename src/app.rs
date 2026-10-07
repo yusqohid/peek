@@ -119,6 +119,9 @@ pub struct App {
     pub github_rx: Option<std::sync::mpsc::Receiver<GithubEvent>>,
     pub cache: AnalysisCache,
     pub last_scan: Option<std::time::Instant>,
+    pub search_query: String,
+    pub is_searching: bool,
+    pub sort_reversed: bool,
 }
 
 impl App {
@@ -146,7 +149,17 @@ impl App {
             github_rx: None,
             cache: AnalysisCache::default(),
             last_scan: None,
+            search_query: String::new(),
+            is_searching: false,
+            sort_reversed: false,
         }
+    }
+
+    /// Width below which the project table switches to a compact layout.
+    pub const COMPACT_WIDTH: u16 = 80;
+
+    pub fn use_compact_layout(width: u16) -> bool {
+        width < Self::COMPACT_WIDTH
     }
 
     /// Whether an automatic refresh is due. Manual scans update the timer.
@@ -415,12 +428,20 @@ impl App {
             .sum()
     }
 
-    /// Projects filtered by the ignored flag.
+    /// Projects filtered by the ignored flag and the search query.
     pub fn visible_projects(&self) -> Vec<&ProjectInfo> {
+        let query = self.search_query.to_lowercase();
         self.projects
             .iter()
             .filter(|p| self.show_ignored || !p.ignored)
+            .filter(|p| query.is_empty() || p.name.to_lowercase().contains(&query))
             .collect()
+    }
+
+    /// Keep the selection inside the visible list after filtering.
+    fn clamp_selection(&mut self) {
+        let len = self.visible_projects().len();
+        self.selected_project = self.selected_project.min(len.saturating_sub(1));
     }
 
     /// Aggregated totals across all visible (non-ignored) projects.
@@ -557,6 +578,57 @@ impl App {
     }
 
     fn handle_project_list_key(&mut self, key: KeyEvent) {
+        // Search mode captures most keys as query text.
+        if self.is_searching {
+            match key.code {
+                KeyCode::Esc => {
+                    self.search_query.clear();
+                    self.is_searching = false;
+                    self.clamp_selection();
+                    self.status_message = "Search cleared".to_string();
+                }
+                KeyCode::Enter => {
+                    self.is_searching = false;
+                    self.clamp_selection();
+                    let n = self.visible_projects().len();
+                    self.status_message = if self.search_query.is_empty() {
+                        "Search cleared".to_string()
+                    } else {
+                        format!("Filter '{}' — {n} match(es)", self.search_query)
+                    };
+                }
+                KeyCode::Backspace => {
+                    self.search_query.pop();
+                    self.clamp_selection();
+                }
+                KeyCode::Char(c) => {
+                    self.search_query.push(c);
+                    self.clamp_selection();
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Char('/') => {
+                self.is_searching = true;
+                self.status_message = "Type to filter, Enter to apply, Esc to clear".to_string();
+                return;
+            }
+            KeyCode::Char('d') => {
+                self.sort_reversed = !self.sort_reversed;
+                self.apply_sort();
+                self.status_message = format!(
+                    "Sorted by {} ({})",
+                    self.sort_order.label(),
+                    self.direction_label()
+                );
+                return;
+            }
+            _ => {}
+        }
+
         let visible_len = self.visible_projects().len();
         if visible_len == 0 {
             return;
@@ -580,13 +652,15 @@ impl App {
             KeyCode::Char('s') => {
                 self.sort_order = self.sort_order.next();
                 self.apply_sort();
-                self.status_message = format!("Sorted by {}", self.sort_order.label());
+                self.status_message = format!(
+                    "Sorted by {} ({})",
+                    self.sort_order.label(),
+                    self.direction_label()
+                );
             }
             KeyCode::Char('i') => {
                 self.show_ignored = !self.show_ignored;
-                self.selected_project = self
-                    .selected_project
-                    .min(self.visible_projects().len().saturating_sub(1));
+                self.clamp_selection();
                 self.status_message = if self.show_ignored {
                     "Showing ignored projects".to_string()
                 } else {
@@ -594,6 +668,16 @@ impl App {
                 };
             }
             _ => {}
+        }
+    }
+
+    /// Human direction for the current sort: Name defaults to asc, metrics to desc.
+    pub fn direction_label(&self) -> &'static str {
+        let default_asc = self.sort_order == SortOrder::Name;
+        if self.sort_reversed == default_asc {
+            "desc"
+        } else {
+            "asc"
         }
     }
 
@@ -614,6 +698,9 @@ impl App {
                 self.projects
                     .sort_by_key(|a| std::cmp::Reverse(a.last_modified));
             }
+        }
+        if self.sort_reversed {
+            self.projects.reverse();
         }
         // Reset selection after re-sorting.
         self.selected_project = 0;
@@ -886,5 +973,86 @@ mod tests {
 
         app.config.general.refresh_interval_secs = 0;
         assert!(!app.should_auto_refresh(std::time::Instant::now()));
+    }
+
+    fn app_with_named_projects() -> App {
+        let mut app = App::new(AppConfig::default());
+        app.active_tab = ActiveTab::Projects;
+        app.projects = vec![
+            project_with_stats("alpha", 100, 5, 10),
+            project_with_stats("beta", 500, 1, 1),
+            project_with_stats("gamma", 200, 20, 5),
+        ];
+        app
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn search_filters_by_name_and_clamps_selection() {
+        let mut app = app_with_named_projects();
+        app.selected_project = 2;
+
+        press(&mut app, KeyCode::Char('/'));
+        assert!(app.is_searching);
+        for c in "alp".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        assert_eq!(app.search_query, "alp");
+
+        let visible: Vec<_> = app
+            .visible_projects()
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        assert_eq!(visible, vec!["alpha"]);
+        assert_eq!(app.selected_project, 0);
+
+        press(&mut app, KeyCode::Enter);
+        assert!(!app.is_searching);
+        assert_eq!(app.visible_projects().len(), 1);
+
+        press(&mut app, KeyCode::Esc);
+        // Esc outside search mode is ignored; query stays until search Esc.
+        assert_eq!(app.search_query, "alp");
+    }
+
+    #[test]
+    fn search_escape_clears_query() {
+        let mut app = app_with_named_projects();
+        press(&mut app, KeyCode::Char('/'));
+        press(&mut app, KeyCode::Char('b'));
+        assert_eq!(app.visible_projects().len(), 1);
+
+        press(&mut app, KeyCode::Esc);
+        assert!(!app.is_searching);
+        assert!(app.search_query.is_empty());
+        assert_eq!(app.visible_projects().len(), 3);
+    }
+
+    #[test]
+    fn direction_toggle_reverses_order() {
+        let mut app = app_with_named_projects();
+        assert_eq!(app.direction_label(), "asc");
+
+        press(&mut app, KeyCode::Char('d'));
+        assert!(app.sort_reversed);
+        assert_eq!(app.direction_label(), "desc");
+        assert_eq!(sorted_names(&app), vec!["gamma", "beta", "alpha"]);
+
+        press(&mut app, KeyCode::Char('s'));
+        assert_eq!(app.sort_order, SortOrder::Loc);
+        // Loc default is desc; reversed makes it asc.
+        assert_eq!(app.direction_label(), "asc");
+        assert_eq!(sorted_names(&app), vec!["alpha", "gamma", "beta"]);
+    }
+
+    #[test]
+    fn compact_layout_threshold() {
+        assert!(App::use_compact_layout(79));
+        assert!(!App::use_compact_layout(80));
+        assert!(!App::use_compact_layout(120));
     }
 }
