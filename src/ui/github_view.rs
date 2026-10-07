@@ -193,11 +193,7 @@ fn render_top_repos(f: &mut Frame, app: &App, area: Rect) {
         .map(|r| {
             let lang = r.language.as_deref().unwrap_or("Text");
             let desc = r.description.as_deref().unwrap_or("");
-            let desc_truncated = if desc.len() > 30 {
-                format!("{}…", &desc[..29])
-            } else {
-                desc.to_string()
-            };
+            let desc_truncated = crate::ui::text::truncate_str(desc, 30);
 
             ListItem::new(Line::from(vec![
                 Span::styled(

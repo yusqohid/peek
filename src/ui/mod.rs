@@ -3,6 +3,7 @@ pub mod github_view;
 pub mod help;
 pub mod project_detail;
 pub mod project_list;
+pub mod text;
 pub mod widgets;
 
 use ratatui::{
