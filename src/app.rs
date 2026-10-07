@@ -114,6 +114,7 @@ pub struct App {
     pub github_data: GitHubData,
     pub scan_rx: Option<std::sync::mpsc::Receiver<ScanEvent>>,
     pub github_rx: Option<std::sync::mpsc::Receiver<GithubEvent>>,
+    pub scan_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub cache: AnalysisCache,
     pub last_scan: Option<std::time::Instant>,
     pub search_query: String,
@@ -144,6 +145,7 @@ impl App {
             github_data: GitHubData::default(),
             scan_rx: None,
             github_rx: None,
+            scan_cancel: None,
             cache: AnalysisCache::default(),
             last_scan: None,
             search_query: String::new(),
@@ -174,11 +176,15 @@ impl App {
     /// Start a background scan; returns immediately without blocking the UI.
     ///
     /// Validation failures are applied synchronously. A previous in-flight
-    /// scan is abandoned by replacing its channel; its late messages are
-    /// ignored once the receiver is dropped. The detail view is preserved so
-    /// auto-refresh never yanks the user out of what they are reading —
-    /// callers that want a fresh list (manual `r`) clear it themselves.
+    /// scan is asked to stop via its cancellation flag and its channel is
+    /// replaced, so any late messages from it are ignored. The detail view
+    /// is preserved so auto-refresh never yanks the user out of what they
+    /// are reading — callers that want a fresh list (manual `r`) clear it
+    /// themselves.
     pub fn start_scan(&mut self) {
+        if let Some(cancel) = self.scan_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         let scan_dir = self.config.resolved_scan_directory();
         if let Err(message) = check_scan_directory(&scan_dir) {
             self.projects.clear();
@@ -200,7 +206,9 @@ impl App {
         let depth = self.config.general.scan_depth;
         let analysis = self.config.analysis.clone();
         let cache = self.cache.clone();
-        std::thread::spawn(move || run_scan(scan_dir, depth, analysis, cache, tx));
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.scan_cancel = Some(cancel.clone());
+        std::thread::spawn(move || run_scan(scan_dir, depth, analysis, cache, cancel, tx));
     }
 
     /// Drain finished background work without blocking. Call once per frame.
@@ -208,6 +216,7 @@ impl App {
         let mut finished: Option<(Vec<ProjectInfo>, AnalysisCache, usize)> = None;
         let mut scan_failed: Option<String> = None;
         let mut scan_disconnected = false;
+        let mut scan_cancelled = false;
 
         if let Some(rx) = self.scan_rx.as_ref() {
             loop {
@@ -230,6 +239,10 @@ impl App {
                         scan_failed = Some(message);
                         break;
                     }
+                    Ok(ScanEvent::Cancelled) => {
+                        scan_cancelled = true;
+                        break;
+                    }
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         scan_disconnected = true;
@@ -250,6 +263,7 @@ impl App {
             }
             self.is_loading = false;
             self.scan_rx = None;
+            self.scan_cancel = None;
             self.scan_error = None;
             self.last_scan = Some(std::time::Instant::now());
             if self.projects.is_empty() {
@@ -268,11 +282,18 @@ impl App {
             self.selected_project = 0;
             self.is_loading = false;
             self.scan_rx = None;
+            self.scan_cancel = None;
             self.scan_error = Some(message.clone());
             self.status_message = message;
+        } else if scan_cancelled {
+            // Superseded by a newer scan; the new scan owns the UI state now.
+            self.is_loading = false;
+            self.scan_rx = None;
+            self.scan_cancel = None;
         } else if scan_disconnected && self.is_loading {
             self.is_loading = false;
             self.scan_rx = None;
+            self.scan_cancel = None;
             self.scan_error = Some("Background scan stopped unexpectedly.".to_string());
             self.status_message = "Background scan stopped unexpectedly.".to_string();
         }
@@ -950,6 +971,46 @@ mod tests {
         assert!(app.scan_rx.is_none());
         assert!(!app.is_loading);
         assert!(app.scan_error.is_some());
+    }
+
+    #[test]
+    fn restarting_scan_cancels_the_previous_worker() {
+        let dir = tempfile::Builder::new()
+            .prefix("peek-test-")
+            .tempdir()
+            .expect("tempdir should be created");
+        let mut app = app_with_scan_dir(&dir.path().to_string_lossy());
+
+        app.start_scan();
+        let first_cancel = app
+            .scan_cancel
+            .as_ref()
+            .expect("first scan should hold a token")
+            .clone();
+
+        app.start_scan();
+        assert!(
+            first_cancel.load(std::sync::atomic::Ordering::Relaxed),
+            "superseded scan must be flagged"
+        );
+        assert!(app.scan_cancel.is_some());
+        assert!(app.is_loading);
+    }
+
+    #[test]
+    fn poll_clears_cancelled_scan_quietly() {
+        let mut app = App::new(AppConfig::default());
+        app.is_loading = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.scan_rx = Some(rx);
+        tx.send(crate::worker::ScanEvent::Cancelled)
+            .expect("send should work");
+
+        app.poll_background();
+
+        assert!(!app.is_loading);
+        assert!(app.scan_rx.is_none());
+        assert!(app.scan_error.is_none());
     }
 
     #[test]
