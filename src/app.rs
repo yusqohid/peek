@@ -6,6 +6,7 @@ use crate::analyzer::{
 use crate::config::AppConfig;
 use crate::model::github::GitHubData;
 use crate::model::project::ProjectInfo;
+use crate::worker::{GithubEvent, ScanEvent, run_github_fetch, run_scan};
 
 /// Which tab / view is currently active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +114,8 @@ pub struct App {
     pub status_message: String,
     pub scan_error: Option<String>,
     pub github_data: GitHubData,
+    pub scan_rx: Option<std::sync::mpsc::Receiver<ScanEvent>>,
+    pub github_rx: Option<std::sync::mpsc::Receiver<GithubEvent>>,
 }
 
 impl App {
@@ -136,10 +139,136 @@ impl App {
             status_message: String::new(),
             scan_error: None,
             github_data: GitHubData::default(),
+            scan_rx: None,
+            github_rx: None,
         }
     }
 
+    /// Start a background scan; returns immediately without blocking the UI.
+    ///
+    /// Validation failures are applied synchronously. A previous in-flight
+    /// scan is abandoned by replacing its channel; its late messages are
+    /// ignored once the receiver is dropped.
+    pub fn start_scan(&mut self) {
+        self.detail_project = None;
+        let scan_dir = self.config.resolved_scan_directory();
+        if let Err(message) = check_scan_directory(&scan_dir) {
+            self.projects.clear();
+            self.selected_project = 0;
+            self.is_loading = false;
+            self.scan_rx = None;
+            self.scan_error = Some(message.clone());
+            self.status_message = message;
+            return;
+        }
+
+        self.is_loading = true;
+        self.scan_error = None;
+        self.status_message = format!("Starting scan in {}…", scan_dir.display());
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.scan_rx = Some(rx);
+        let depth = self.config.general.scan_depth;
+        let analysis = self.config.analysis.clone();
+        std::thread::spawn(move || run_scan(scan_dir, depth, analysis, tx));
+    }
+
+    /// Drain finished background work without blocking. Call once per frame.
+    pub fn poll_background(&mut self) {
+        let mut finished_projects: Option<Vec<ProjectInfo>> = None;
+        let mut scan_failed: Option<String> = None;
+        let mut scan_disconnected = false;
+
+        if let Some(rx) = self.scan_rx.as_ref() {
+            loop {
+                match rx.try_recv() {
+                    Ok(ScanEvent::Started { total }) => {
+                        self.status_message = format!("Scanning… found {total} candidates");
+                    }
+                    Ok(ScanEvent::ProjectDone { index, total, name }) => {
+                        self.status_message = format!("Analyzing [{index}/{total}] {name}…");
+                    }
+                    Ok(ScanEvent::Finished { projects }) => {
+                        finished_projects = Some(projects);
+                        break;
+                    }
+                    Ok(ScanEvent::Failed { message }) => {
+                        scan_failed = Some(message);
+                        break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        scan_disconnected = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(projects) = finished_projects {
+            self.projects = projects;
+            self.apply_sort();
+            self.is_loading = false;
+            self.scan_rx = None;
+            self.scan_error = None;
+            if self.projects.is_empty() {
+                let dir = self.config.resolved_scan_directory();
+                self.status_message = format!("No projects found in {}", dir.display());
+            } else {
+                let active = self.visible_projects().len();
+                self.status_message = format!("Found {active} projects");
+            }
+        } else if let Some(message) = scan_failed {
+            self.projects.clear();
+            self.selected_project = 0;
+            self.is_loading = false;
+            self.scan_rx = None;
+            self.scan_error = Some(message.clone());
+            self.status_message = message;
+        } else if scan_disconnected && self.is_loading {
+            self.is_loading = false;
+            self.scan_rx = None;
+            self.scan_error = Some("Background scan stopped unexpectedly.".to_string());
+            self.status_message = "Background scan stopped unexpectedly.".to_string();
+        }
+
+        if let Some(rx) = self.github_rx.as_ref() {
+            match rx.try_recv() {
+                Ok(GithubEvent::Success(data)) => {
+                    self.github_data = data;
+                    self.github_rx = None;
+                }
+                Ok(GithubEvent::Failed(message)) => {
+                    self.github_data.error_message = Some(message);
+                    self.github_data.is_loading = false;
+                    self.github_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.github_data.is_loading = false;
+                    self.github_rx = None;
+                }
+            }
+        }
+    }
+
+    /// Start a background GitHub fetch; returns immediately.
+    pub fn start_github_fetch(&mut self) {
+        let username = self.config.github.username.trim().to_string();
+        if username.is_empty() {
+            return;
+        }
+
+        self.github_data.is_loading = true;
+        self.github_data.error_message = None;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.github_rx = Some(rx);
+        let token = self.config.github.resolved_token();
+        std::thread::spawn(move || run_github_fetch(username, token, tx));
+    }
+
     /// Run the initial project scan, code analysis, git analysis, and technical debt scan.
+    #[allow(dead_code)]
     pub fn scan_and_analyze(&mut self) {
         self.is_loading = true;
         self.scan_error = None;
@@ -189,6 +318,7 @@ impl App {
     }
 
     /// Fetch remote GitHub data if username is configured.
+    #[allow(dead_code)]
     pub fn fetch_github(&mut self) {
         let username = self.config.github.username.trim().to_string();
         if username.is_empty() {
@@ -384,8 +514,8 @@ impl App {
                 return;
             }
             KeyCode::Char('r') => {
-                self.scan_and_analyze();
-                self.fetch_github();
+                self.start_scan();
+                self.start_github_fetch();
                 return;
             }
             _ => {}
@@ -632,5 +762,79 @@ mod tests {
         assert!(app.scan_error.is_none());
         assert!(!app.is_loading);
         assert!(app.status_message.contains("No projects found"));
+    }
+
+    #[test]
+    fn poll_applies_finished_scan_and_sorts() {
+        let mut app = App::new(AppConfig::default());
+        app.is_loading = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.scan_rx = Some(rx);
+        tx.send(crate::worker::ScanEvent::Started { total: 2 })
+            .expect("send should work");
+        tx.send(crate::worker::ScanEvent::ProjectDone {
+            index: 1,
+            total: 2,
+            name: "beta".to_string(),
+        })
+        .expect("send should work");
+        tx.send(crate::worker::ScanEvent::Finished {
+            projects: vec![
+                project_with_stats("beta", 10, 1, 1),
+                project_with_stats("alpha", 10, 1, 1),
+            ],
+        })
+        .expect("send should work");
+
+        app.poll_background();
+
+        assert_eq!(sorted_names(&app), vec!["alpha", "beta"]);
+        assert!(!app.is_loading);
+        assert!(app.scan_rx.is_none());
+        assert!(app.scan_error.is_none());
+        assert!(app.status_message.contains("Found 2 projects"));
+    }
+
+    #[test]
+    fn poll_applies_failed_scan_as_error() {
+        let mut app = App::new(AppConfig::default());
+        app.is_loading = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.scan_rx = Some(rx);
+        tx.send(crate::worker::ScanEvent::Failed {
+            message: "boom".to_string(),
+        })
+        .expect("send should work");
+
+        app.poll_background();
+
+        assert!(app.projects.is_empty());
+        assert!(!app.is_loading);
+        assert_eq!(app.scan_error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn poll_applies_github_success_and_failure() {
+        let mut app = App::new(AppConfig::default());
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.github_rx = Some(rx);
+        tx.send(crate::worker::GithubEvent::Failed("offline".to_string()))
+            .expect("send should work");
+
+        app.poll_background();
+
+        assert_eq!(app.github_data.error_message.as_deref(), Some("offline"));
+        assert!(!app.github_data.is_loading);
+        assert!(app.github_rx.is_none());
+    }
+
+    #[test]
+    fn start_scan_rejects_missing_directory_without_spawning() {
+        let mut app = app_with_scan_dir("/definitely/not/here/peek-test");
+        app.start_scan();
+
+        assert!(app.scan_rx.is_none());
+        assert!(!app.is_loading);
+        assert!(app.scan_error.is_some());
     }
 }

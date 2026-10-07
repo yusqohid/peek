@@ -131,15 +131,18 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         ratatui::layout::Constraint::Length(14),
     ];
 
+    let hint = if app.is_loading {
+        format!(" {} ", app.status_message)
+    } else {
+        " [Enter] Detail  [s] Sort  [i] Ignored  [j/k] Navigate  [r] Refresh ".to_string()
+    };
     let table = Table::new(rows, widths)
         .header(header)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(" 📁 Projects ")
-                .title_bottom(
-                    " [Enter] Detail  [s] Sort  [i] Ignored  [j/k] Navigate  [r] Refresh ",
-                ),
+                .title_bottom(hint),
         )
         .row_highlight_style(
             Style::default()
