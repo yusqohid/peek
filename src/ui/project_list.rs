@@ -73,6 +73,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     )
     .height(1);
 
+    if App::use_compact_layout(area.width) {
+        render_compact(f, app, &visible, area);
+        return;
+    }
+
     let rows: Vec<Row> = visible
         .iter()
         .enumerate()
@@ -133,15 +138,30 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
     let hint = if app.is_loading {
         format!(" {} ", app.status_message)
+    } else if app.is_searching {
+        format!(" Filter: {}▌ (Enter apply, Esc clear) ", app.search_query)
     } else {
-        " [Enter] Detail  [s] Sort  [i] Ignored  [j/k] Navigate  [r] Refresh ".to_string()
+        format!(
+            " [Enter] Detail  [s] Sort:{}  [d] Dir  [/] Filter{}  [i] Ignored  [r] Refresh ",
+            app.sort_order.label(),
+            if app.search_query.is_empty() {
+                String::new()
+            } else {
+                format!(" '{}'", app.search_query)
+            }
+        )
+    };
+    let title = if app.search_query.is_empty() {
+        " 📁 Projects ".to_string()
+    } else {
+        format!(" 📁 Projects [{}] ", app.search_query)
     };
     let table = Table::new(rows, widths)
         .header(header)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" 📁 Projects ")
+                .title(title)
                 .title_bottom(hint),
         )
         .row_highlight_style(
@@ -154,6 +174,74 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let mut state = TableState::default();
     state.select(Some(app.selected_project));
 
+    f.render_stateful_widget(table, area, &mut state);
+}
+
+fn render_compact(
+    f: &mut Frame,
+    app: &App,
+    visible: &[&crate::model::project::ProjectInfo],
+    area: Rect,
+) {
+    let header = Row::new(vec![
+        Cell::from(" #"),
+        Cell::from("Project"),
+        Cell::from("LOC"),
+        Cell::from("Activity"),
+    ])
+    .style(
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )
+    .height(1);
+
+    let rows: Vec<Row> = visible
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let loc = p
+                .code_stats
+                .as_ref()
+                .map_or("-".to_string(), |s| format_number(s.code_lines));
+            let style = if p.ignored {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default()
+            };
+            Row::new(vec![
+                Cell::from(format!(" {}", i + 1)),
+                Cell::from(p.name.clone()),
+                Cell::from(loc),
+                Cell::from(p.last_activity_display()),
+            ])
+            .style(style)
+        })
+        .collect();
+
+    let widths = [
+        ratatui::layout::Constraint::Length(4),
+        ratatui::layout::Constraint::Min(10),
+        ratatui::layout::Constraint::Length(8),
+        ratatui::layout::Constraint::Length(10),
+    ];
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" 📁 Projects (compact) "),
+        )
+        .row_highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
+
+    let mut state = TableState::default();
+    state.select(Some(app.selected_project));
     f.render_stateful_widget(table, area, &mut state);
 }
 
