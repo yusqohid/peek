@@ -427,8 +427,54 @@ impl App {
 mod tests {
     use std::path::PathBuf;
 
+    use chrono::Local;
+
     use super::*;
+    use crate::model::git::{CommitInfo, GitStats};
     use crate::model::project::ProjectType;
+    use crate::model::stats::CodeStats;
+
+    fn project_with_stats(name: &str, loc: usize, commits: usize, days_ago: i64) -> ProjectInfo {
+        let mut project = ProjectInfo::new(
+            name.to_string(),
+            PathBuf::from(format!("/{name}")),
+            ProjectType::Rust,
+        );
+        project.code_stats = Some(CodeStats {
+            code_lines: loc,
+            comment_lines: 0,
+            blank_lines: 0,
+            file_count: 1,
+            languages: vec![],
+            total_bytes: 0,
+        });
+        let timestamp = Local::now() - chrono::Duration::days(days_ago);
+        project.git_stats = Some(GitStats {
+            total_commits: commits,
+            commits_last_30_days: 0,
+            last_commit: Some(CommitInfo {
+                hash: "abc".to_string(),
+                author: "tester".to_string(),
+                message: "test".to_string(),
+                timestamp,
+            }),
+            recent_commits: vec![],
+            top_contributors: vec![],
+            daily_activity: vec![0; 364],
+            current_branch: None,
+        });
+        project.last_modified = Some(timestamp);
+        project
+    }
+
+    fn sorted_names(app: &App) -> Vec<String> {
+        app.projects.iter().map(|p| p.name.clone()).collect()
+    }
+
+    fn press_sort(app: &mut App) {
+        app.active_tab = ActiveTab::Projects;
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+    }
 
     #[test]
     fn hiding_ignored_projects_clamps_the_selected_row() {
@@ -457,5 +503,33 @@ mod tests {
         assert!(!app.show_ignored);
         assert_eq!(app.visible_projects().len(), 1);
         assert_eq!(app.selected_project, 0);
+    }
+
+    #[test]
+    fn sort_cycles_through_loc_commits_recent_and_name() {
+        let mut app = App::new(AppConfig::default());
+        app.projects = vec![
+            project_with_stats("alpha", 100, 5, 10),
+            project_with_stats("beta", 500, 1, 1),
+            project_with_stats("gamma", 200, 20, 5),
+        ];
+
+        assert_eq!(app.sort_order, SortOrder::Name);
+        press_sort(&mut app);
+        assert_eq!(app.sort_order, SortOrder::Loc);
+        assert_eq!(sorted_names(&app), vec!["beta", "gamma", "alpha"]);
+        assert_eq!(app.selected_project, 0);
+
+        press_sort(&mut app);
+        assert_eq!(app.sort_order, SortOrder::Commits);
+        assert_eq!(sorted_names(&app), vec!["gamma", "alpha", "beta"]);
+
+        press_sort(&mut app);
+        assert_eq!(app.sort_order, SortOrder::LastModified);
+        assert_eq!(sorted_names(&app), vec!["beta", "gamma", "alpha"]);
+
+        press_sort(&mut app);
+        assert_eq!(app.sort_order, SortOrder::Name);
+        assert_eq!(sorted_names(&app), vec!["alpha", "beta", "gamma"]);
     }
 }
