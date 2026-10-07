@@ -1,3 +1,4 @@
+use chrono::{Datelike, Local, Weekday};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -34,6 +35,20 @@ impl<'a> ActivityHeatmap<'a> {
     }
 }
 
+/// Day labels for the 7 heatmap rows.
+///
+/// `data[0]` is 364 days ago and `364 % 7 == 0`, so row 0 always falls on the
+/// same weekday as today — not necessarily Monday. Labels rotate accordingly.
+pub fn weekday_labels_for(today: Weekday) -> [&'static str; 7] {
+    const NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let start = today.num_days_from_monday() as usize;
+    let mut out = [""; 7];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = NAMES[(start + i) % 7];
+    }
+    out
+}
+
 impl<'a> Widget for ActivityHeatmap<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let block = self
@@ -47,7 +62,7 @@ impl<'a> Widget for ActivityHeatmap<'a> {
             return;
         }
 
-        let day_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+        let day_labels = weekday_labels_for(Local::now().weekday());
         let label_width = 4; // "Mon "
         let available_cols = (inner_area.width as usize).saturating_sub(label_width);
         let num_weeks = 52.min(available_cols);
@@ -128,6 +143,38 @@ impl<'a> Widget for ActivityHeatmap<'a> {
                 Span::styled(" More", Style::default().fg(Color::DarkGray)),
             ]);
             buf.set_line(inner_area.x, legend_y, &legend_line, inner_area.width);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Weekday;
+
+    #[test]
+    fn labels_start_on_todays_weekday() {
+        assert_eq!(
+            weekday_labels_for(Weekday::Mon),
+            ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        );
+        assert_eq!(
+            weekday_labels_for(Weekday::Sun),
+            ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        );
+        assert_eq!(
+            weekday_labels_for(Weekday::Wed),
+            ["Wed", "Thu", "Fri", "Sat", "Sun", "Mon", "Tue"]
+        );
+    }
+
+    #[test]
+    fn labels_cover_each_weekday_once() {
+        use chrono::Weekday::*;
+        for day in [Mon, Tue, Wed, Thu, Fri, Sat, Sun] {
+            let mut sorted = weekday_labels_for(day);
+            sorted.sort_unstable();
+            assert_eq!(sorted, ["Fri", "Mon", "Sat", "Sun", "Thu", "Tue", "Wed"]);
         }
     }
 }

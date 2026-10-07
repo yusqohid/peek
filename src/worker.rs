@@ -34,7 +34,7 @@ pub enum ScanEvent {
 /// Result sent from the GitHub worker thread to the UI thread.
 #[derive(Debug)]
 pub enum GithubEvent {
-    Success(GitHubData),
+    Success(Box<GitHubData>),
     Failed(String),
 }
 
@@ -112,7 +112,7 @@ pub fn run_github_fetch(username: String, token: Option<String>, tx: Sender<Gith
     let event = match GitHubClient::new(username, token) {
         Ok(client) => match tokio::runtime::Runtime::new() {
             Ok(rt) => match rt.block_on(client.fetch_all()) {
-                Ok(data) => GithubEvent::Success(data),
+                Ok(data) => GithubEvent::Success(Box::new(data)),
                 Err(e) => GithubEvent::Failed(e),
             },
             Err(e) => GithubEvent::Failed(format!("Failed to start async runtime: {e}")),

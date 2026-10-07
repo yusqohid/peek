@@ -178,9 +178,10 @@ impl App {
     ///
     /// Validation failures are applied synchronously. A previous in-flight
     /// scan is abandoned by replacing its channel; its late messages are
-    /// ignored once the receiver is dropped.
+    /// ignored once the receiver is dropped. The detail view is preserved so
+    /// auto-refresh never yanks the user out of what they are reading —
+    /// callers that want a fresh list (manual `r`) clear it themselves.
     pub fn start_scan(&mut self) {
-        self.detail_project = None;
         let scan_dir = self.config.resolved_scan_directory();
         if let Err(message) = check_scan_directory(&scan_dir) {
             self.projects.clear();
@@ -245,6 +246,11 @@ impl App {
             self.projects = projects;
             self.cache = cache;
             self.apply_sort();
+            if let Some(idx) = self.detail_project
+                && idx >= self.visible_projects().len()
+            {
+                self.detail_project = None;
+            }
             self.is_loading = false;
             self.scan_rx = None;
             self.scan_error = None;
@@ -277,7 +283,7 @@ impl App {
         if let Some(rx) = self.github_rx.as_ref() {
             match rx.try_recv() {
                 Ok(GithubEvent::Success(data)) => {
-                    self.github_data = data;
+                    self.github_data = *data;
                     self.github_rx = None;
                 }
                 Ok(GithubEvent::Failed(message)) => {
@@ -564,6 +570,7 @@ impl App {
                 return;
             }
             KeyCode::Char('r') => {
+                self.detail_project = None;
                 self.start_scan();
                 self.start_github_fetch();
                 return;
@@ -911,6 +918,66 @@ mod tests {
         assert!(app.scan_rx.is_none());
         assert!(app.scan_error.is_none());
         assert!(app.status_message.contains("Found 2 projects"));
+    }
+
+    #[test]
+    fn background_finish_preserves_detail_view() {
+        let mut app = App::new(AppConfig::default());
+        app.is_loading = true;
+        app.detail_project = Some(0);
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.scan_rx = Some(rx);
+        tx.send(crate::worker::ScanEvent::Finished {
+            projects: vec![project_with_stats("alpha", 10, 1, 1)],
+            cache: crate::cache::AnalysisCache::default(),
+            cached: 0,
+        })
+        .expect("send should work");
+
+        app.poll_background();
+
+        assert_eq!(app.detail_project, Some(0));
+    }
+
+    #[test]
+    fn background_finish_drops_out_of_range_detail() {
+        let mut app = App::new(AppConfig::default());
+        app.is_loading = true;
+        app.detail_project = Some(5);
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.scan_rx = Some(rx);
+        tx.send(crate::worker::ScanEvent::Finished {
+            projects: vec![project_with_stats("alpha", 10, 1, 1)],
+            cache: crate::cache::AnalysisCache::default(),
+            cached: 0,
+        })
+        .expect("send should work");
+
+        app.poll_background();
+
+        assert!(app.detail_project.is_none());
+    }
+
+    #[test]
+    fn start_scan_preserves_detail_view() {
+        let dir = tempfile::Builder::new()
+            .prefix("peek-test-")
+            .tempdir()
+            .expect("tempdir should be created");
+        let mut app = app_with_scan_dir(&dir.path().to_string_lossy());
+        app.detail_project = Some(0);
+
+        app.start_scan();
+
+        assert_eq!(app.detail_project, Some(0));
+        // Drain the worker so the test never leaks a thread.
+        for _ in 0..500 {
+            app.poll_background();
+            if app.scan_rx.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     #[test]

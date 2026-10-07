@@ -186,7 +186,7 @@ fn render_profile_card(f: &mut Frame, app: &App, area: Rect) {
 fn render_top_repos(f: &mut Frame, app: &App, area: Rect) {
     let github = &app.github_data;
 
-    let items: Vec<ListItem> = github
+    let mut items: Vec<ListItem> = github
         .repos
         .iter()
         .take(5)
@@ -216,6 +216,15 @@ fn render_top_repos(f: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
+    if items.is_empty()
+        && let Some(err) = &github.repos_error
+    {
+        items.push(ListItem::new(Line::from(vec![Span::styled(
+            format!("  ⚠️ Couldn't load repos: {err}"),
+            Style::default().fg(Color::Yellow),
+        )])));
+    }
+
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
@@ -228,7 +237,12 @@ fn render_activity_feed(f: &mut Frame, app: &App, area: Rect) {
     let github = &app.github_data;
 
     if github.events.is_empty() {
-        let p = Paragraph::new("  No recent public events recorded in the last 30 days.").block(
+        let message = if let Some(err) = &github.events_error {
+            format!("  ⚠️ Couldn't load events: {err} — press [r] to retry.")
+        } else {
+            "  No recent public events recorded in the last 30 days.".to_string()
+        };
+        let p = Paragraph::new(message).block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(" ⚡ Recent GitHub Events "),
