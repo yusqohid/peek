@@ -86,19 +86,19 @@ pub fn scan_todos(root: &Path, exclude_dirs: &[String]) -> TodoStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        fs,
-        time::{SystemTime, UNIX_EPOCH},
-    };
+    use std::fs;
+
+    fn tempdir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("peek-test-")
+            .tempdir()
+            .expect("tempdir should be created")
+    }
 
     #[test]
     fn counts_markers_in_source_files_and_skips_excluded_directories() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after Unix epoch")
-            .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("peek-todo-scanner-{}-{unique}", std::process::id()));
+        let dir = tempdir();
+        let root = dir.path();
         fs::create_dir_all(root.join("excluded")).expect("fixture directory should be created");
         fs::write(
             root.join("main.rs"),
@@ -110,14 +110,28 @@ mod tests {
         fs::write(root.join("excluded/ignored.rs"), "// TODO: excluded")
             .expect("excluded source should be written");
 
-        let stats = scan_todos(&root, &["excluded".to_string()]);
+        let stats = scan_todos(root, &["excluded".to_string()]);
 
         assert_eq!(stats.todo_count, 1);
         assert_eq!(stats.fixme_count, 1);
         assert_eq!(stats.hack_count, 1);
         assert_eq!(stats.bug_count, 1);
         assert_eq!(stats.total(), 4);
+    }
 
-        fs::remove_dir_all(root).expect("fixture directory should be removed");
+    #[test]
+    fn skips_files_larger_than_one_megabyte() {
+        let dir = tempdir();
+        let root = dir.path();
+        let mut big = String::from("// TODO: too big\n");
+        big.push_str(&"x".repeat(1_000_001));
+        fs::write(root.join("big.rs"), big).expect("large fixture should be written");
+        fs::write(root.join("small.rs"), "// TODO: small\n")
+            .expect("small fixture should be written");
+
+        let stats = scan_todos(root, &[]);
+
+        assert_eq!(stats.todo_count, 1);
+        assert_eq!(stats.total(), 1);
     }
 }

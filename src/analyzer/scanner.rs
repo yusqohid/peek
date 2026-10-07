@@ -121,63 +121,157 @@ pub fn resolve_path(path: &str) -> PathBuf {
 mod tests {
     use super::*;
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use tempfile::TempDir;
 
-    fn temporary_directory(label: &str) -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after Unix epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "peek-scanner-{label}-{}-{unique}",
-            std::process::id()
-        ))
+    fn tempdir() -> TempDir {
+        tempfile::Builder::new()
+            .prefix("peek-test-")
+            .tempdir()
+            .expect("tempdir should be created")
     }
 
-    #[test]
-    fn test_scan_current_directory() {
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let config = AnalysisConfig {
+    fn test_config() -> AnalysisConfig {
+        AnalysisConfig {
             exclude_dirs: vec!["target".to_string()],
             ignored_projects: vec![],
-        };
-        let projects = scan_projects(&manifest_dir, 2, &config);
-        assert!(!projects.is_empty(), "Should detect current project");
-        assert_eq!(projects[0].project_type, ProjectType::Rust);
-        assert!(!projects[0].ignored);
+        }
+    }
+
+    fn create_project(root: &Path, name: &str, marker: &str) -> PathBuf {
+        let dir = root.join(name);
+        fs::create_dir_all(&dir).expect("fixture directory should be created");
+        fs::write(dir.join(marker), "marker").expect("marker file should be written");
+        dir
     }
 
     #[test]
-    fn test_ignored_project() {
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let name = manifest_dir
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
+    fn detects_all_known_marker_types() {
+        let tmp = tempdir();
+        let markers = vec![
+            ("rust-app", "Cargo.toml", ProjectType::Rust),
+            ("node-app", "package.json", ProjectType::NodeJs),
+            ("py-app", "pyproject.toml", ProjectType::Python),
+            ("py-setup", "setup.py", ProjectType::Python),
+            ("go-app", "go.mod", ProjectType::Go),
+            ("java-maven", "pom.xml", ProjectType::Java),
+            ("java-gradle", "build.gradle", ProjectType::Java),
+            ("csharp-app", "example.csproj", ProjectType::CSharp),
+            ("ruby-app", "Gemfile", ProjectType::Ruby),
+            ("php-app", "composer.json", ProjectType::Php),
+        ];
+        for (name, marker, _) in &markers {
+            create_project(tmp.path(), name, marker);
+        }
+
+        let projects = scan_projects(tmp.path(), 2, &test_config());
+
+        assert_eq!(projects.len(), markers.len());
+        for (name, _, expected) in &markers {
+            let found = projects
+                .iter()
+                .find(|p| &p.name == name)
+                .unwrap_or_else(|| panic!("project {name} should be detected"));
+            assert_eq!(&found.project_type, expected);
+        }
+    }
+
+    #[test]
+    fn respects_max_depth() {
+        let tmp = tempdir();
+        create_project(tmp.path(), "shallow", "Cargo.toml");
+        let nested = tmp.path().join("a").join("b");
+        fs::create_dir_all(&nested).expect("nested dir should be created");
+        fs::write(nested.join("Cargo.toml"), "marker").expect("marker should be written");
+
+        let shallow_scan = scan_projects(tmp.path(), 1, &test_config());
+        assert!(shallow_scan.iter().any(|p| p.name == "shallow"));
+        assert!(!shallow_scan.iter().any(|p| p.name == "b"));
+
+        let deep_scan = scan_projects(tmp.path(), 3, &test_config());
+        assert!(deep_scan.iter().any(|p| p.name == "b"));
+    }
+
+    #[test]
+    fn respects_exclude_dirs() {
+        let tmp = tempdir();
+        let inner = tmp.path().join("vendor").join("inner");
+        fs::create_dir_all(&inner).expect("inner dir should be created");
+        fs::write(inner.join("package.json"), "{}").expect("marker should be written");
+        create_project(tmp.path(), "visible", "Cargo.toml");
+
         let config = AnalysisConfig {
-            exclude_dirs: vec!["target".to_string()],
-            ignored_projects: vec![name],
+            exclude_dirs: vec!["vendor".to_string()],
+            ignored_projects: vec![],
         };
-        let projects = scan_projects(&manifest_dir, 2, &config);
-        assert!(!projects.is_empty());
-        assert!(projects[0].ignored, "Project should be marked as ignored");
+        let projects = scan_projects(tmp.path(), 4, &config);
+
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name, "visible");
+    }
+
+    #[test]
+    fn marks_ignored_by_name_and_relative_path() {
+        let tmp = tempdir();
+        create_project(tmp.path(), "keep", "Cargo.toml");
+        create_project(tmp.path(), "skip-by-name", "Cargo.toml");
+        let nested_proj = tmp.path().join("group").join("skip-by-path");
+        fs::create_dir_all(&nested_proj).expect("nested project should be created");
+        fs::write(nested_proj.join("go.mod"), "module x").expect("marker should be written");
+
+        let config = AnalysisConfig {
+            exclude_dirs: vec![],
+            ignored_projects: vec!["skip-by-name".to_string(), "group/skip-by-path".to_string()],
+        };
+        let projects = scan_projects(tmp.path(), 4, &config);
+
+        assert_eq!(projects.len(), 3);
+        let by_name = projects.iter().find(|p| p.name == "skip-by-name").unwrap();
+        assert!(by_name.ignored);
+        let by_path = projects.iter().find(|p| p.name == "skip-by-path").unwrap();
+        assert!(by_path.ignored);
+        let keep = projects.iter().find(|p| p.name == "keep").unwrap();
+        assert!(!keep.ignored);
+    }
+
+    #[test]
+    fn skips_nested_workspace_member() {
+        let tmp = tempdir();
+        let outer = create_project(tmp.path(), "workspace", "Cargo.toml");
+        let member = outer.join("member");
+        fs::create_dir_all(&member).expect("member dir should be created");
+        fs::write(member.join("Cargo.toml"), "marker").expect("marker should be written");
+
+        let projects = scan_projects(tmp.path(), 4, &test_config());
+
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name, "workspace");
+    }
+
+    #[test]
+    fn sorts_projects_case_insensitively() {
+        let tmp = tempdir();
+        for name in ["zeta", "Alpha", "mike"] {
+            create_project(tmp.path(), name, "Cargo.toml");
+        }
+
+        let projects = scan_projects(tmp.path(), 2, &test_config());
+        let names: Vec<_> = projects.iter().map(|p| p.name.as_str()).collect();
+
+        assert_eq!(names, vec!["Alpha", "mike", "zeta"]);
     }
 
     #[test]
     fn detects_csharp_project_and_uses_the_matched_marker_timestamp() {
-        let root = temporary_directory("csharp");
-        let project_dir = root.join("example");
+        let tmp = tempdir();
+        let project_dir = tmp.path().join("example");
         fs::create_dir_all(&project_dir).expect("fixture directory should be created");
         fs::write(project_dir.join("example.csproj"), "<Project />")
             .expect("C# marker should be written");
 
-        let projects = scan_projects(&root, 2, &AnalysisConfig::default());
+        let projects = scan_projects(tmp.path(), 2, &AnalysisConfig::default());
 
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].project_type, ProjectType::CSharp);
         assert!(projects[0].last_modified.is_some());
-
-        fs::remove_dir_all(root).expect("fixture directory should be removed");
     }
 }
