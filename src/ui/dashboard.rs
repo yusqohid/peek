@@ -208,7 +208,7 @@ fn render_language_chart(f: &mut Frame, app: &App, area: Rect) {
             let color = colors[i % colors.len()];
             Bar::default()
                 .value(*loc as u64)
-                .label(Line::from(truncate_str(name, 10)))
+                .label(Line::from(crate::ui::text::truncate_str(name, 10)))
                 .style(Style::default().fg(color))
         })
         .collect();
@@ -303,13 +303,5 @@ fn format_number(n: usize) -> String {
         format!("{:.1}K", n as f64 / 1_000.0)
     } else {
         n.to_string()
-    }
-}
-
-fn truncate_str(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max - 1])
     }
 }
