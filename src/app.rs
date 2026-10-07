@@ -76,6 +76,29 @@ impl SortOrder {
     }
 }
 
+/// Validate that `scan_dir` can be scanned; return a user-facing message on failure.
+fn check_scan_directory(scan_dir: &std::path::Path) -> Result<(), String> {
+    if !scan_dir.exists() {
+        return Err(format!(
+            "Scan directory does not exist: {}. Check general.scan_directory in config.",
+            scan_dir.display()
+        ));
+    }
+    if !scan_dir.is_dir() {
+        return Err(format!(
+            "Scan path is not a directory: {}.",
+            scan_dir.display()
+        ));
+    }
+    if let Err(e) = std::fs::read_dir(scan_dir) {
+        return Err(format!(
+            "Cannot read scan directory {}: {e}. Check permissions.",
+            scan_dir.display()
+        ));
+    }
+    Ok(())
+}
+
 /// Top-level application state (the "Model" in TEA).
 pub struct App {
     pub active_tab: ActiveTab,
@@ -88,6 +111,7 @@ pub struct App {
     pub should_quit: bool,
     pub config: AppConfig,
     pub status_message: String,
+    pub scan_error: Option<String>,
     pub github_data: GitHubData,
 }
 
@@ -110,6 +134,7 @@ impl App {
             should_quit: false,
             config,
             status_message: String::new(),
+            scan_error: None,
             github_data: GitHubData::default(),
         }
     }
@@ -117,9 +142,18 @@ impl App {
     /// Run the initial project scan, code analysis, git analysis, and technical debt scan.
     pub fn scan_and_analyze(&mut self) {
         self.is_loading = true;
+        self.scan_error = None;
         self.status_message = "Scanning projects…".to_string();
 
         let scan_dir = self.config.resolved_scan_directory();
+        if let Err(message) = check_scan_directory(&scan_dir) {
+            self.projects.clear();
+            self.selected_project = 0;
+            self.is_loading = false;
+            self.scan_error = Some(message.clone());
+            self.status_message = message;
+            return;
+        }
         let depth = self.config.general.scan_depth;
 
         self.projects = scanner::scan_projects(&scan_dir, depth, &self.config.analysis);
@@ -147,7 +181,11 @@ impl App {
         self.apply_sort();
         self.is_loading = false;
         let active = self.visible_projects().len();
-        self.status_message = format!("Found {active} projects");
+        if self.projects.is_empty() {
+            self.status_message = format!("No projects found in {}", scan_dir.display());
+        } else {
+            self.status_message = format!("Found {active} projects");
+        }
     }
 
     /// Fetch remote GitHub data if username is configured.
@@ -531,5 +569,68 @@ mod tests {
         press_sort(&mut app);
         assert_eq!(app.sort_order, SortOrder::Name);
         assert_eq!(sorted_names(&app), vec!["alpha", "beta", "gamma"]);
+    }
+
+    fn app_with_scan_dir(scan_directory: &str) -> App {
+        let mut config = AppConfig::default();
+        config.general.scan_directory = scan_directory.to_string();
+        config.general.scan_depth = 2;
+        App::new(config)
+    }
+
+    #[test]
+    fn missing_scan_directory_sets_scan_error() {
+        let missing = std::env::temp_dir().join(format!(
+            "peek-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock should work")
+                .as_nanos()
+        ));
+        let mut app = app_with_scan_dir(&missing.to_string_lossy());
+
+        app.scan_and_analyze();
+
+        assert!(app.projects.is_empty());
+        assert_eq!(app.selected_project, 0);
+        assert!(!app.is_loading);
+        let err = app.scan_error.expect("scan_error should be set");
+        assert!(err.contains("does not exist"), "unexpected: {err}");
+        assert!(app.status_message.contains("does not exist"));
+    }
+
+    #[test]
+    fn file_as_scan_directory_sets_scan_error() {
+        let dir = tempfile::Builder::new()
+            .prefix("peek-test-")
+            .tempdir()
+            .expect("tempdir should be created");
+        let file = dir.path().join("not-a-dir.toml");
+        std::fs::write(&file, "x").expect("file should be written");
+        let mut app = app_with_scan_dir(&file.to_string_lossy());
+
+        app.scan_and_analyze();
+
+        assert!(app.projects.is_empty());
+        let err = app.scan_error.expect("scan_error should be set");
+        assert!(err.contains("not a directory"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn empty_scan_directory_clears_error_and_reports_no_projects() {
+        let dir = tempfile::Builder::new()
+            .prefix("peek-test-")
+            .tempdir()
+            .expect("tempdir should be created");
+        let mut app = app_with_scan_dir(&dir.path().to_string_lossy());
+        app.scan_error = Some("stale".to_string());
+
+        app.scan_and_analyze();
+
+        assert!(app.projects.is_empty());
+        assert!(app.scan_error.is_none());
+        assert!(!app.is_loading);
+        assert!(app.status_message.contains("No projects found"));
     }
 }
